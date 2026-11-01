@@ -1,31 +1,93 @@
-# Hermes Agent plugins for Open WebUI
+<div align="center">
 
-Four Open WebUI plugins for chatting with Hermes Agent:
+# 🔌 openwebui-hermes-plugs
 
-- **Hermes Media** (`hermes_media.py`): shows images, audio and video from Hermes inline, with streaming on.
-- **Hermes Activity** (`hermes_activity.py`): shows each tool Hermes runs while it works, and pops up an Approve/Deny dialog when Hermes asks permission to run something. Install steps are [further down](#hermes-activity-tool-calls-and-approvals).
-- **Hermes Stop** (`hermes_stop.py`): makes Open WebUI's Stop button stop Hermes too. Without it, Stop only ends the reply on screen while Hermes keeps working. Install steps are [further down](#hermes-stop).
-- **Hermes Commands** (`hermes_commands.py`): buttons on each Hermes reply for usage, every tool step (with subagents), and a command dialog for scheduled tasks, skills, memory, todos, insights, files, sessions, steering and more. Install steps are [further down](#hermes-commands).
+**Use [Hermes Agent](https://github.com/NousResearch/hermes-agent) from [Open WebUI](https://github.com/open-webui/open-webui) without losing the good parts.**
 
-Each one works on its own; install any of them. They need no backend of their own: they talk to the Hermes
-API server and dashboard you already run, and they follow each model's Open WebUI connection, so one set of
-plugins serves any number of Hermes profiles. See [One Hermes profile per user](#one-hermes-profile-per-open-webui-user)
-for giving each person their own profile.
+Pictures, tool activity, approvals, the Stop button and Hermes commands, in four small plugins.<br>
+No extra backend. Nothing to host. Paste them into Open WebUI and go.
 
-# Hermes Media
+![Open WebUI](https://img.shields.io/badge/Open%20WebUI-0.12%2B-f2a33a?style=flat-square)
+![Hermes Agent](https://img.shields.io/badge/Hermes%20Agent-0.22-1b1f27?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-5d6576?style=flat-square)
+
+[What you get](#what-you-get) · [Quick start](#quick-start) · [The plugins](#the-plugins) · [One profile per user](#one-hermes-profile-per-open-webui-user) · [Locking it down](#locking-down-a-home-users-profile)
+
+</div>
+
+---
+
+## What you get
+
+### 🖼️ Pictures, audio and video show up in the chat
+Hermes marks the files it makes as `MEDIA:` lines. Open WebUI can't reach the Hermes server's files, so all you
+got was the text. **Hermes Media** fetches each file and swaps in the picture or a player.
+
+![Hermes Media: a bare MEDIA line before, the picture inline after](docs/images/1-media.png)
+
+### 🛠️ You can see what Hermes is doing
+**Hermes Activity** shows each tool call as a status line while Hermes works, and gives every round of thinking
+its own block and time instead of one giant merged one.
+
+![Hermes Activity: one merged think block before, tool count and per-round thinking after](docs/images/2-activity.png)
+
+### ✅ Approvals actually reach you
+When Hermes wants permission for a risky command, Open WebUI used to say nothing until Hermes gave up.
+Now you get an **Approve / Deny** dialog right in the chat.
+
+![Approvals: Hermes stuck thinking before, an approval dialog after](docs/images/3-approvals.png)
+
+### ⌨️ Hermes commands, one click away
+**Hermes Commands** adds buttons under each reply: token usage, every tool step with its arguments and result,
+and a command box for scheduled tasks, memory, skills, files, sessions and steering a running turn.
+
+![Hermes Commands: no Hermes buttons before, a tool-steps window after](docs/images/4-commands.png)
+
+### ⏹️ And Stop means stop
+**Hermes Stop** makes Open WebUI's Stop button stop Hermes too, not just the text on screen.
+
+---
+
+## Quick start
+
+1. In Open WebUI, go to **Admin Panel › Functions › +** and paste a plugin file. Save, then switch it on.
+2. Go to **Workspace › Models**, edit your Hermes model, and tick the plugin (filters under *Filters*,
+   Hermes Commands under *Actions*).
+3. Chat. Hermes Activity, Stop and Commands reuse the model's existing Hermes connection, so they need no
+   settings. Hermes Media needs the dashboard address and a sign-in token ([setup below](#install)).
+
+Each plugin works on its own; install any of them.
+
+## The plugins
+
+| Plugin | File | Type | What it does |
+| --- | --- | --- | --- |
+| [Hermes Media](#hermes-media) | `hermes_media.py` | Filter | Shows pictures, audio and video Hermes makes, with streaming on |
+| [Hermes Activity](#hermes-activity-tool-calls-and-approvals) | `hermes_activity.py` | Filter | Tool status lines, per-round thinking, Approve/Deny dialogs, scheduled-task alerts |
+| [Hermes Stop](#hermes-stop) | `hermes_stop.py` | Filter | Stop button stops the Hermes run, not just the reply on screen |
+| [Hermes Commands](#hermes-commands) | `hermes_commands.py` | Action | Usage, tool steps (with subagents) and a Hermes command box |
+
+They need no backend of their own: they talk to the Hermes API server and dashboard you already run, and they
+follow each model's Open WebUI connection, so one set of plugins serves any number of Hermes profiles. See
+[One Hermes profile per user](#one-hermes-profile-per-open-webui-user) for giving each person their own profile.
+
+---
+
+## Hermes Media
 
 Hermes marks files in its replies as `MEDIA:/path/to/file`, or links them as `file:///path` or `workspace://path`. Open WebUI can't read files on the Hermes server, so those lines show up as plain text. This filter fetches each file from the Hermes dashboard when the reply finishes and swaps the line for the picture or a player. Open WebUI and Hermes can run on different machines.
 
-## What you need
+### What you need
 
 - Open WebUI 0.12 or newer, and an admin account on it.
 - A Hermes Agent dashboard with username and password login turned on.
 - Network access from the Open WebUI server to the dashboard port (9119 by default).
 - Python 3 on any computer that can reach the dashboard (for the one-time sign-in).
 
-## Install
+### Install
 
-### 1. Give the Hermes dashboard a fixed signing secret
+#### 1. Give the Hermes dashboard a fixed signing secret
 
 Without one, Hermes makes a new secret each time it starts, and the filter is logged out after every restart.
 
@@ -46,7 +108,7 @@ environment:
 
 Keep the secret private. Changing it later signs out the filter and Hermes Desktop.
 
-### 2. Get a refresh token
+#### 2. Get a refresh token
 
 Run this from any computer that can reach the dashboard:
 
@@ -56,13 +118,13 @@ python3 get_refresh_token.py http://<hermes-host>:9119
 
 Enter the dashboard username and password when asked. The script prints a long token; copy it. Your password is only sent to the dashboard and is never saved.
 
-### 3. Add the filter to Open WebUI
+#### 3. Add the filter to Open WebUI
 
 1. Go to **Admin Panel › Functions** and click **+** (New Function).
 2. Delete the sample code, paste the whole contents of `hermes_media.py`, and click **Save**.
 3. **Turn the Hermes Media function on with its switch.** A function that is saved but switched off does nothing.
 
-### 4. Fill in the filter settings
+#### 4. Fill in the filter settings
 
 Click the gear icon next to **Hermes Media** and set:
 
@@ -73,14 +135,14 @@ Click the gear icon next to **Hermes Media** and set:
 
 Leave everything else at its default. Click **Save**.
 
-### 5. Attach the filter to your Hermes model
+#### 5. Attach the filter to your Hermes model
 
 1. Go to **Workspace › Models** and edit the Hermes model.
 2. Under **Filters**, tick **Hermes Media**, then save the model.
 
 Attach it only to Hermes models. Don't make it global.
 
-### 6. Allow the audio and video players
+#### 6. Allow the audio and video players
 
 Audio and video play in a small embedded player, which needs one Open WebUI setting turned on. Pick one:
 
@@ -89,21 +151,21 @@ Audio and video play in a small embedded player, which needs one Open WebUI sett
 
 To skip this step, turn off **Inline Players** in the filter settings. Audio and video then appear as attached files the user clicks to play.
 
-### 7. Turn streaming back on
+#### 7. Turn streaming back on
 
 If you turned streaming off to work around missing images, turn it back on for the Hermes model.
 
-### 8. Test it
+#### 8. Test it
 
 Ask Hermes for a picture and a short sound clip. While the reply streams you may see a `MEDIA:` line for a moment; when it finishes, the picture and the player appear.
 
-## Optional: tell the agent
+### Optional: tell the agent
 
 Hermes may tell users that audio can't be shown in chat. Add a line like this to the Hermes profile's instructions:
 
 > In Open WebUI, images, audio and video sent as `MEDIA:` tags are shown inline to the user.
 
-## Optional: pictures straight from ComfyUI (no terminal needed)
+### Optional: pictures straight from ComfyUI (no terminal needed)
 
 A Hermes profile without the terminal tool can't download a ComfyUI result to show it. Let the filter fetch it
 instead:
@@ -116,7 +178,7 @@ instead:
 Open WebUI must be able to reach that address. Only addresses that start with a listed prefix are fetched, and
 redirects are refused.
 
-## Settings
+### Settings
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -134,7 +196,7 @@ redirects are refused.
 | Download Timeout (s) | 60 | Per file. |
 | Inline Players | On | Off attaches audio and video as files instead. |
 
-## Troubleshooting
+### Troubleshooting
 
 When a file can't be shown, the `MEDIA:` line stays in the reply with a short note after it.
 
@@ -148,7 +210,7 @@ When a file can't be shown, the `MEDIA:` line stays in the reply with a short no
 | Players show but stay at 0:00 | Step 6 isn't done for that user. |
 | A `MEDIA:` line stays with no note | The path is outside Allowed Folders or outside this profile's folder, the web address isn't in Allowed Web Addresses, or the file type isn't in the type lists. This is on purpose. |
 
-## Security notes
+### Security notes
 
 - The refresh token has full access to the Hermes dashboard. Treat it like the dashboard password.
 - Only Open WebUI admins can see or change filter settings. Regular users never see the token.
@@ -158,11 +220,13 @@ When a file can't be shown, the `MEDIA:` line stays in the reply with a short no
 - The filter only fetches media types from Allowed Folders, so a reply can't pull other files from the Hermes server into a chat.
 - The dashboard token can read every profile's files. Keep **Only This Profile's Files** on when different people use different profiles, so one person's model can't show another person's files.
 
-## Moving Hermes to another server
+### Moving Hermes to another server
 
 Change **Dashboard URL**. Run step 2 again only if the signing secret changed. If the new install stores data somewhere other than `/opt/data`, update **Allowed Folders**.
 
-# Hermes Activity: tool calls and approvals
+---
+
+## Hermes Activity: tool calls and approvals
 
 While Hermes works, Open WebUI normally shows nothing: no tools, no progress. When Hermes needs permission to run a command, it waits up to 5 minutes for an answer that Open WebUI never asks for, then gives up. This filter fixes both:
 
@@ -171,7 +235,7 @@ While Hermes works, Open WebUI normally shows nothing: no tools, no progress. Wh
 
 It needs no settings: it reuses the Hermes connection Open WebUI already has.
 
-## Install
+### Install
 
 1. Go to **Admin Panel › Functions** and click **+** (New Function).
 2. Delete the sample code, paste the whole contents of `hermes_activity.py`, and click **Save**.
@@ -181,7 +245,7 @@ It needs no settings: it reuses the Hermes connection Open WebUI already has.
 
 Keep streaming on for the Hermes model; the filter only works on streamed replies.
 
-## Settings
+### Settings
 
 All optional.
 
@@ -195,7 +259,7 @@ All optional.
 | Approval Timeout (s) | 280 | Dialog closes after this long with no answer, which counts as denied. Hermes gives up at 300. |
 | Hermes API URL, Hermes API Key | (empty) | Only if approvals fail to send: the Hermes connection URL (ending in `/v1`) and key. Empty uses the model's own connection. |
 
-## Troubleshooting
+### Troubleshooting
 
 | What you see | Fix |
 | --- | --- |
@@ -204,13 +268,15 @@ All optional.
 | "Could not send your answer to Hermes (404)" or "(409)" | Hermes already gave up on that request (more than 5 minutes passed). Ask again. |
 | Dialog never appears, status says "Waiting for your approval" | The browser tab was closed or reloaded during the wait. Ask again with the chat open. |
 
-# Hermes Stop
+---
+
+## Hermes Stop
 
 Open WebUI's **Stop** button ends the reply on screen, but Hermes can keep working in the background, still running tools and using the model. Sending a new message while a reply is still streaming does the same, because Open WebUI stops the current reply first.
 
 This filter notices when a Hermes reply ends early and tells Hermes to stop that run, through Hermes's own stop endpoint. You keep using the normal Stop button. It needs no settings: it reuses the Hermes connection Open WebUI already has.
 
-## Install
+### Install
 
 1. Go to **Admin Panel › Functions** and click **+** (New Function).
 2. Delete the sample code, paste the whole contents of `hermes_stop.py`, and click **Save**.
@@ -220,18 +286,20 @@ This filter notices when a Hermes reply ends early and tells Hermes to stop that
 
 Keep streaming on for the Hermes model; the filter only works on streamed replies.
 
-## Settings
+### Settings
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Hermes API URL, Hermes API Key | (empty) | Only if stopping fails: the Hermes connection URL (ending in `/v1`) and key. Empty uses the model's own connection. |
 
-## Good to know
+### Good to know
 
 - A reply that finishes normally is never stopped.
 - If stopping fails, Open WebUI's log shows `Hermes Stop: could not stop <run id>` or `Hermes Stop: stop <run id> -> <status>`.
 
-# Hermes Commands
+---
+
+## Hermes Commands
 
 Adds three buttons under every Hermes reply (hover the reply to see them):
 
@@ -260,7 +328,7 @@ show as an inline player.
 | `status` | Hermes version, profile, model, toolsets, scheduled tasks |
 | `forget` | Delete this chat's Hermes session (asks first). Open WebUI's own delete leaves the Hermes session behind. |
 
-## Install
+### Install
 
 1. Go to **Admin Panel › Functions** and click **+** (New Function).
 2. Delete the sample code, paste the whole contents of `hermes_commands.py`, and click **Save**.
@@ -270,7 +338,7 @@ show as an inline player.
 
 `steer` and `stop` need the Hermes Stop filter, which tracks the running turn. `skills`, `skill`, `memory`, `insights`, `files`, `file`, `workspaces` and `cron runs` need the Hermes dashboard: they use Hermes Media's Dashboard URL and Refresh Token, or the same two settings here.
 
-## Settings
+### Settings
 
 All optional.
 
@@ -282,14 +350,16 @@ All optional.
 | Browsable Folders | (empty) | Folders `files`, `file` and `memory` may read. Empty = this profile's own folder only; other profiles' folders are always hidden unless listed here. |
 | Show Results In | `panel` | `panel`: a chip under the reply that opens a closable window. `inline`: a card at the top of the reply. |
 
-## Good to know
+### Good to know
 
 - Typing `/usage` into the normal chat box sends it to the model as text; Open WebUI cannot run commands from the chat box without the model. Use the Hermes command button.
 - Commands act on this chat's own Hermes session, found from its first message.
 - Hermes refuses sensitive files (`.env`, `config.yaml`, tokens), whatever the path.
 
 
-# One Hermes profile per Open WebUI user
+---
+
+## One Hermes profile per Open WebUI user
 
 Each person logs in to Open WebUI with their own account and sees one model. That model is wired to one Hermes
 profile, so their chats, memory and skills stay in that profile. The plugins follow the model's connection, so
@@ -314,7 +384,9 @@ Open WebUI login  ──group access──▶  model "work"  ──connection─
 Create new profiles without `--clone` (`hermes profile create <name>`): cloning copies the source profile's
 memory into the new one.
 
-# Locking down a home user's profile
+---
+
+## Locking down a home user's profile
 
 Hermes keeps each profile's memory, chats, skills and scheduled tasks separate, but it does **not** keep a
 profile's tools out of other profiles' files: the terminal, file and code tools can read and change anything in
@@ -340,7 +412,9 @@ Without the terminal the agent can't save files, so show generated pictures thro
 working folders (for example a ComfyUI workflow folder) at a copy inside the profile's own folder. The change
 takes effect on the next request.
 
-# Locking down Open WebUI for home users
+---
+
+## Locking down Open WebUI for home users
 
 | Setting | Recommended | Why |
 | --- | --- | --- |
@@ -352,13 +426,17 @@ takes effect on the next request.
 | User permissions: workspace tools/functions | Off (default) | Tools and functions run code on the Open WebUI server |
 | iframe Sandbox Allow Same Origin | Only if you want inline audio/video players | With it on, HTML in a reply (artifacts, HTML cards) runs as Open WebUI and can act as that user's account. Off: turn off Hermes Media's **Inline Players**; audio and video then arrive as file chips. |
 
-# Tests
+---
+
+## Tests
 
 ```bash
 # unit tests (needs Python with pydantic and aiohttp, e.g. inside the Open WebUI image)
 python3 -m unittest discover -s tests
 ```
 
-# License
+---
 
-MIT. See [LICENSE](LICENSE).
+## License
+
+MIT. See [LICENSE](LICENSE). A side project, shared as-is.
