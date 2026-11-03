@@ -22,7 +22,8 @@ No extra backend. Nothing to host. Paste them into Open WebUI and go.
 
 ### 🖼️ Pictures, audio and video show up in the chat
 Hermes marks the files it makes as `MEDIA:` lines. Open WebUI can't reach the Hermes server's files, so all you
-got was the text. **Hermes Media** fetches each file and swaps in the picture or a player.
+got was the text. **Hermes Media** fetches each file and swaps in the picture, a player or a download link. It also
+passes files you attach on to Hermes, so it can open and edit the originals.
 
 ![Hermes Media: a bare MEDIA line before, the picture inline after](docs/images/1-media.png)
 
@@ -40,7 +41,8 @@ Now you get an **Approve / Deny** dialog right in the chat.
 
 ### ⌨️ Hermes commands, one click away
 **Hermes Commands** adds buttons under each reply: token usage, every tool step with its arguments and result,
-and a command box for scheduled tasks, memory, skills, files, sessions and steering a running turn.
+your files, and a command box for scheduled tasks, memory, skills, sessions and steering a running turn. Results
+open in a side panel you can scroll and close.
 
 ![Hermes Commands: no Hermes buttons before, a tool-steps window after](docs/images/4-commands.png)
 
@@ -63,10 +65,10 @@ Each plugin works on its own; install any of them.
 
 | Plugin | File | Type | What it does |
 | --- | --- | --- | --- |
-| [Hermes Media](#hermes-media) | `hermes_media.py` | Filter | Shows pictures, audio and video Hermes makes, with streaming on |
+| [Hermes Media](#hermes-media) | `hermes_media.py` | Filter | Shows pictures, audio, video and files Hermes makes, with streaming on; passes your attachments to Hermes |
 | [Hermes Activity](#hermes-activity-tool-calls-and-approvals) | `hermes_activity.py` | Filter | Tool status lines, per-round thinking, Approve/Deny dialogs, scheduled-task alerts |
 | [Hermes Stop](#hermes-stop) | `hermes_stop.py` | Filter | Stop button stops the Hermes run, not just the reply on screen |
-| [Hermes Commands](#hermes-commands) | `hermes_commands.py` | Action | Usage, tool steps (with subagents) and a Hermes command box |
+| [Hermes Commands](#hermes-commands) | `hermes_commands.py` | Action | Usage, tool steps (with subagents), My files and a Hermes command box, in a side panel |
 
 They need no backend of their own: they talk to the Hermes API server and dashboard you already run, and they
 follow each model's Open WebUI connection, so one set of plugins serves any number of Hermes profiles. See
@@ -186,6 +188,9 @@ redirects are refused.
 | Refresh Token | (empty) | Dashboard sign-in. The filter renews it on its own. |
 | Allowed Folders | `/opt/data/` | Only files under these folders are fetched. Comma-separated. |
 | Only This Profile's Files | On | A model wired to `/p/<profile>/v1` only gets files from that profile's folder (`/opt/data/profiles/<profile>/`); the default profile never gets other profiles' files. Turn off only if every profile belongs to the same person. |
+| Send Attachments To Hermes | On | Copies files the user attaches into the profile's folder and tells Hermes where they are, so it can open and edit the originals. Open WebUI still adds the extracted text as before. Needs the dashboard settings above. |
+| Attachments Folder | `uploads` | Folder inside the profile's folder that attachments are copied to. |
+| Text Types From Outputs | `md,txt,csv,tsv,json,html,xml,ics` | Text files Hermes points to become download links too, but only from the profile's own `outputs/` and attachments folders, so memory notes, configs and logs stay out of chat. Needs Only This Profile's Files on. |
 | Allowed Web Addresses | (empty) | Address starts the filter may fetch `MEDIA:` web links from, for example a ComfyUI `/view?` address. Empty: web links stay as text. |
 | Image Types | `png,jpg,jpeg,gif,webp,bmp` | Shown as pictures. |
 | Audio Types | `mp3,wav,ogg,m4a,flac,opus` | Shown as audio players. |
@@ -218,6 +223,7 @@ When a file can't be shown, the `MEDIA:` line stays in the reply with a short no
 - Every Function and Tool installed in Open WebUI runs in the same process and could read the token. Only install ones you trust.
 - The dashboard uses plain HTTP. Limit port 9119 to the Open WebUI server and admin machines with a firewall, or put HTTPS in front of it.
 - The filter only fetches media types from Allowed Folders, so a reply can't pull other files from the Hermes server into a chat.
+- Attachments are copied into the Hermes profile the model is wired to, under its own folder. Turn off **Send Attachments To Hermes** if files should stay in Open WebUI only.
 - The dashboard token can read every profile's files. Keep **Only This Profile's Files** on when different people use different profiles, so one person's model can't show another person's files.
 
 ### Moving Hermes to another server
@@ -307,9 +313,7 @@ Adds three buttons under every Hermes reply (hover the reply to see them):
 - **Hermes steps**: every tool Hermes used in the last turn, with its arguments and result, plus a card per subagent showing what it did.
 - **Hermes command**: opens a box where you type a command. Results are not sent to Hermes.
 
-Results appear as a "Source" chip under the reply; click it to open the result in a window you can close. Set
-**Show Results In** to `inline` for cards at the top of the reply instead. Audio and video from `file` always
-show as an inline player.
+There is also a **My files** button. Results open in a side panel straight away; it scrolls and closes with X, Esc or a click outside. Set **Show Results In** to `chip` for a source chip under the reply, or `inline` for a card at the top of the reply.
 
 | Command | What it does |
 | --- | --- |
@@ -325,6 +329,7 @@ show as an inline player.
 | `insights [days]` | Tokens and cost per day, by model, top skills |
 | `files [path]`, `file <path>`, `workspaces` | Browse the Hermes server's files (with git status); open text, images, audio, video; other files come as downloads |
 | `sessions [search]`, `import <id>` | Hermes sessions from every surface (CLI, Telegram, Desktop...), copy one into a new chat |
+| `myfiles` (also its own **My files** button) | Files Hermes made for you (`outputs/`) and files you attached (`uploads/`), newest first, as downloads |
 | `status` | Hermes version, profile, model, toolsets, scheduled tasks |
 | `forget` | Delete this chat's Hermes session (asks first). Open WebUI's own delete leaves the Hermes session behind. |
 
@@ -348,7 +353,25 @@ All optional.
 | Dashboard URL, Dashboard Refresh Token | (empty) | Empty uses Hermes Media's. |
 | Hermes Profile | (empty) | Empty reads it from the connection URL (`/p/<profile>/v1`), else `default`. |
 | Browsable Folders | (empty) | Folders `files`, `file` and `memory` may read. Empty = this profile's own folder only; other profiles' folders are always hidden unless listed here. |
-| Show Results In | `panel` | `panel`: a chip under the reply that opens a closable window. `inline`: a card at the top of the reply. |
+| Show Results In | `panel` | `panel`: a side panel that opens at once, scrolls, and closes with X, Esc or a click outside. `chip`: a source chip under the reply. `inline`: a card at the top of the reply. |
+| My Files: Max File Size (MB) | 200 | Larger files are listed without a download link. |
+
+### Optional: a Files entry in the sidebar
+
+`web/loader.js` adds a **Files** entry under Notes in Open WebUI's sidebar. It opens the same side panel as the My files button. It only appears for people who have a model with Hermes Commands attached, and it uses their own Open WebUI login.
+
+Open WebUI runs `/static/loader.js` on every page and copies it from `/app/build/static/` when the container starts. Mount the file there (read-only), then recreate the container:
+
+```yaml
+services:
+  open-webui:
+    volumes:
+      - /path/to/openwebui-hermes-plugs/web/loader.js:/app/build/static/loader.js:ro
+```
+
+Changes to `loader.js` take effect on the next container start. The sidebar layout is not a stable Open WebUI interface; if an update moves things, the entry simply does not appear and nothing else changes.
+
+`web/panel.js` is the side panel on its own; the plugin already carries a copy, so you don't install it separately.
 
 ### Good to know
 
@@ -407,7 +430,7 @@ platform_toolsets:
 | `cronjob` | A scheduled job can set its own tool list or run a script, which brings the terminal back. Scheduling still works through the Hermes Commands `cron` command, and those jobs run with the `cron` list above. |
 | `connections`, `delegation` | Rarely needed; subagents can only inherit the parent's tools anyway |
 
-Without the terminal the agent can't save files, so show generated pictures through
+Without the `file` tool the agent can't open attachments or save files, so show generated pictures through
 [Allowed Web Addresses](#optional-pictures-straight-from-comfyui-no-terminal-needed), and point any MCP server's
 working folders (for example a ComfyUI workflow folder) at a copy inside the profile's own folder. The change
 takes effect on the next request.

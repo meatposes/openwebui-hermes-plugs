@@ -1,7 +1,7 @@
 """
 title: Hermes Media
-version: 1.0.0
-description: Shows images, audio and video from Hermes Agent MEDIA: tags inline in chat, with streaming on.
+version: 1.1.1
+description: Shows images, audio, video and files from Hermes Agent MEDIA: tags in chat, and passes your attachments to Hermes.
 required_open_webui_version: 0.12.0
 license: MIT
 """
@@ -85,6 +85,27 @@ def profile_allows(path: str, profile: str, data_root: str = "/opt/data") -> boo
     return not (normalized == profiles or normalized.startswith(profiles + "/"))
 
 
+def profile_folder(profile: str, data_root: str = "/opt/data") -> str:
+    """A profile's own folder; the default profile's is the data root."""
+    return f"{data_root}/profiles/{profile}" if profile and profile != "default" else data_root
+
+
+def in_user_folders(path: str, profile: Optional[str], folders: tuple = ("outputs", "uploads"),
+                    data_root: str = "/opt/data") -> bool:
+    """True for files under the profile's outputs/ or uploads/ folder: what Hermes makes for the user and
+    what the user attached. Memory notes, configs and logs live elsewhere."""
+    if profile is None or not path.startswith("/") or ".." in path.split("/"):
+        return False
+    normalized = os.path.normpath(path)
+    return any(normalized.startswith(f"{profile_folder(profile, data_root)}/{f}/") for f in folders if f)
+
+
+def upload_name(filename: str) -> str:
+    """File name safe to hand to the agent: no folders, no whitespace."""
+    name = re.sub(r"\s+", "_", os.path.basename(filename or "").strip())
+    return re.sub(r"[^\w.()+-]", "_", name).lstrip(".") or "upload"
+
+
 def path_allowed(path: str, prefixes: list[str]) -> bool:
     if not path.startswith("/") or ".." in path.split("/"):
         return False
@@ -139,6 +160,23 @@ class Filter:
             description="Other files Hermes points to are attached as download links. Text types (md, txt, "
             "json, csv) are left out on purpose: memory notes, configs and logs are text files.",
         )
+        output_text_extensions: str = Field(
+            default="md,txt,csv,tsv,json,html,xml,ics",
+            title="Text Types From Outputs",
+            description="Text files Hermes points to are download links too, but only from the profile's own "
+            "outputs/ and attachments folders (needs Only This Profile's Files on).",
+        )
+        upload_to_hermes: bool = Field(
+            default=True,
+            title="Send Attachments To Hermes",
+            description="Copy files the user attaches into the profile's folder and tell Hermes where they are, so "
+            "it can open and edit the originals. Open WebUI still adds the extracted text as before.",
+        )
+        uploads_folder: str = Field(
+            default="uploads",
+            title="Attachments Folder",
+            description="Folder inside the profile's folder that attachments are copied to.",
+        )
         workspace_root: str = Field(
             default="",
             title="Workspace Folder (optional)",
@@ -158,6 +196,7 @@ class Filter:
         self._access_token = ""
         self._access_expires = 0.0
         self._token_lock = asyncio.Lock()
+        self._uploaded: set[tuple[str, str]] = set()  # (Open WebUI file id, Hermes path) already sent
 
     # ---- media types -------------------------------------------------------------------------
 
@@ -332,6 +371,62 @@ class Filter:
             ),
         )
 
+    # ---- attachments -------------------------------------------------------------------------
+
+    async def _upload(self, local: str, target: str, function_id: Optional[str]) -> None:
+        """Stream one file into Hermes through the dashboard (POST /api/files/upload-stream)."""
+        import aiohttp
+
+        timeout = aiohttp.ClientTimeout(total=self.valves.timeout_seconds)
+        for attempt in (0, 1):
+            token = await self._access(function_id, force=attempt == 1)
+            try:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    with open(local, "rb") as fh:
+                        form = aiohttp.FormData()
+                        form.add_field("path", target)
+                        form.add_field("overwrite", "true")
+                        form.add_field("file", fh, filename=os.path.basename(target))
+                        async with session.post(f"{self._base_url()}/api/files/upload-stream", data=form,
+                                                headers={"Authorization": f"Bearer {token}"}) as resp:
+                            if resp.status == 401 and attempt == 0:
+                                continue
+                            if resp.status != 200:
+                                raise MediaError(f"upload failed ({resp.status}): {(await resp.text())[:200]}")
+                            return
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                raise MediaError("Hermes unreachable") from exc
+        raise MediaError("dashboard login expired")
+
+    async def _send_uploads(self, body: dict, model, metadata: dict, function_id: Optional[str]) -> list[str]:
+        """Copy this message's attachments into the profile's folder -> the Hermes paths."""
+        from open_webui.models.files import Files
+        from open_webui.storage.provider import Storage
+
+        files = body.get("files") or metadata.get("files") or []
+        if not files or not self._base_url():
+            return []
+        profile = await self._profile(model)
+        if profile is None:
+            return []
+        folder = f"{profile_folder(profile)}/{self.valves.uploads_folder.strip().strip('/') or 'uploads'}"
+        saved = []
+        for item in files:
+            if not isinstance(item, dict) or item.get("type") not in (None, "file"):
+                continue  # knowledge collections, web pages: no single file to copy
+            file_id = item.get("id") or (item.get("file") or {}).get("id")
+            record = await Files.get_file_by_id(file_id) if file_id else None
+            if not record or not record.path:
+                continue
+            target = f"{folder}/{upload_name(record.filename)}"
+            if (file_id, target) not in self._uploaded:
+                local = await asyncio.to_thread(Storage.get_file, record.path)
+                await self._upload(local, target, function_id)
+                self._uploaded.add((file_id, target))
+            if target not in saved:
+                saved.append(target)
+        return saved
+
     # ---- rewrite -----------------------------------------------------------------------------
 
     async def _profile(self, model: Optional[dict]) -> Optional[str]:
@@ -364,13 +459,18 @@ class Filter:
             allowed = url_allowed(path, url_prefixes) if is_url else path_allowed(path, prefixes)
             if allowed and not is_url and self.valves.limit_to_profile:
                 allowed = profile is not None and profile_allows(path, profile)
-            if ext not in kinds or not allowed:
+            kind = kinds.get(ext)
+            user_folders = ("outputs", self.valves.uploads_folder.strip().strip("/"))
+            if kind is None and ext in split_list(self.valves.output_text_extensions) \
+                    and in_user_folders(path, profile, user_folders):
+                kind = "file"
+            if kind is None or not allowed:
                 results[path] = None  # never fetched, left as written
                 continue
             file_id = derived_file_id(chat_id, message_id, path)
             try:
                 await self._ensure_file(file_id, path, user_id, function_id)
-                results[path] = {"kind": kinds[ext], "id": file_id, "name": os.path.basename(name)}
+                results[path] = {"kind": kind, "id": file_id, "name": os.path.basename(name)}
             except MediaError as exc:
                 results[path] = {"error": str(exc)}
             except Exception:
@@ -480,9 +580,30 @@ class Filter:
 
     # ---- Open WebUI hooks --------------------------------------------------------------------
 
-    async def inlet(self, body: dict, __user__: Optional[dict] = None) -> dict:
-        """Before a request goes to Hermes, turn this filter's file links in earlier replies back
-        into the MEDIA:<path> tags Hermes wrote, so the agent still sees its own file paths."""
+    async def inlet(self, body: dict, __user__: Optional[dict] = None, __model__: Optional[dict] = None,
+                    __metadata__: Optional[dict] = None, __id__: Optional[str] = None) -> dict:
+        """Before a request goes to Hermes: copy the user's attachments into the profile's folder and
+        say where they are, and turn this filter's file links in earlier replies back into the
+        MEDIA:<path> tags Hermes wrote, so the agent still sees its own file paths."""
+        if self.valves.upload_to_hermes:
+            try:
+                saved = await self._send_uploads(body, __model__, __metadata__ or {}, __id__)
+                users = [m for m in body.get("messages") or [] if m.get("role") == "user"]
+                if saved and users:
+                    outputs = f"{profile_folder(await self._profile(__model__) or 'default')}/outputs"
+                    note = ("\n\n[The user attached these files. The originals are saved in your folder; open them "
+                            "from there to read or change them: " + ", ".join(saved) + ". To give the user a file, "
+                            f"save it in {outputs}/ and put a MEDIA:<path> line for it in your reply; that line "
+                            "becomes the download link.]")
+                    content = users[-1].get("content")
+                    if isinstance(content, str):
+                        users[-1]["content"] = content + note
+                    elif isinstance(content, list):
+                        content.append({"type": "text", "text": note.strip()})
+            except MediaError as exc:
+                log.warning("Hermes Media: attachments not sent to Hermes: %s", exc)
+            except Exception:
+                log.exception("Hermes Media: attachments not sent to Hermes")
         try:
             from open_webui.models.files import Files
 
@@ -532,7 +653,7 @@ class Filter:
         if not messages or messages[-1].get("role") != "assistant":
             return body
         message = messages[-1]
-        tag_re = build_tag_re(list(self._kinds()))
+        tag_re = build_tag_re(list(self._kinds()) + split_list(self.valves.output_text_extensions))
 
         texts = [message.get("content") or ""]
         for item in message.get("output") or []:

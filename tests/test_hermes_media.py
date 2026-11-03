@@ -56,6 +56,10 @@ def install_stubs(store: Store) -> None:
 
     class Storage:
         @staticmethod
+        def get_file(path):
+            return path
+
+        @staticmethod
         def upload_file(fh, filename, tags):
             data = fh.read()
             store.uploads.append(filename)
@@ -157,6 +161,16 @@ class OutletFlow(unittest.IsolatedAsyncioTestCase):
         app = web.Application()
         app.router.add_post("/auth/native/refresh", self.dash.refresh)
         app.router.add_get("/api/files/download", self.dash.stream)
+        self.received = {}
+
+        async def upload(request):
+            if request.headers.get("Authorization", "").removeprefix("Bearer ") not in self.dash.valid_access:
+                return web.Response(status=401)
+            form = await request.post()
+            self.received[form["path"]] = form["file"].file.read()
+            return web.json_response({"ok": True, "path": form["path"]})
+
+        app.router.add_post("/api/files/upload-stream", upload)
 
         async def comfy_view(request):
             if request.query.get("filename") == "moved.png":
@@ -294,6 +308,38 @@ class OutletFlow(unittest.IsolatedAsyncioTestCase):
         await self.run_outlet("MEDIA:/opt/data/music/song.mp3")
         self.assertEqual(self.events[0]["type"], "files")
         self.assertEqual(self.events[0]["data"]["files"][0]["name"], "song.mp3")
+
+    async def test_text_files_from_outputs_folder(self):
+        self.dash.files["/opt/data/profiles/kid/outputs/plan.csv"] = ("text/csv", b"a,b")
+        self.dash.files["/opt/data/profiles/kid/memories/MEMORY.md"] = ("text/markdown", b"secret")
+        text = "MEDIA:/opt/data/profiles/kid/outputs/plan.csv\nMEDIA:/opt/data/profiles/kid/memories/MEMORY.md"
+        content = (await self.run_outlet(text, connection=1))["messages"][-1]["content"]
+        self.assertIn("[plan.csv](/api/v1/files/", content)
+        self.assertIn("MEDIA:/opt/data/profiles/kid/memories/MEMORY.md", content)
+        self.assertNotIn("/opt/data/profiles/kid/memories/MEMORY.md", self.dash.requested)
+        self.dash.files["/opt/data/outputs/notes.md"] = ("text/markdown", b"# hi")
+        content = (await self.run_outlet("MEDIA:/opt/data/outputs/notes.md", connection=0))["messages"][-1]["content"]
+        self.assertIn("[notes.md](/api/v1/files/", content)
+        self.dash.files["/opt/data/profiles/kid/uploads/list.csv"] = ("text/csv", b"x")
+        content = (await self.run_outlet("MEDIA:/opt/data/profiles/kid/uploads/list.csv", connection=1))["messages"][-1]["content"]
+        self.assertIn("[list.csv](/api/v1/files/", content)
+
+    async def test_attachments_are_copied_to_hermes(self):
+        with tempfile.NamedTemporaryFile(delete=False) as fh:
+            fh.write(b"PK deck")
+        self.store.files["up-1"] = types.SimpleNamespace(id="up-1", filename="Sample Deck 3.pptx", path=fh.name, meta={})
+        body = {"messages": [{"role": "user", "content": "update the deck"}],
+                "files": [{"type": "file", "id": "up-1", "name": "Sample Deck 3.pptx"}, {"type": "file", "id": "up-1"}]}
+        out = await self.filter.inlet(body, __model__={"urlIdx": 1}, __metadata__={}, __id__="hermes_media")
+        self.assertEqual(self.received, {"/opt/data/profiles/kid/uploads/Sample_Deck_3.pptx": b"PK deck"})
+        note = out["messages"][-1]["content"]
+        self.assertEqual(note.count("/opt/data/profiles/kid/uploads/Sample_Deck_3.pptx"), 1)
+        self.assertIn("save it in /opt/data/profiles/kid/outputs/ and put a MEDIA:<path> line", note)
+        self.filter.valves.upload_to_hermes = False
+        body["messages"][-1]["content"] = "again"
+        out = await self.filter.inlet(body, __model__={"urlIdx": 1}, __metadata__={}, __id__="hermes_media")
+        self.assertEqual(out["messages"][-1]["content"], "again")
+        os.unlink(fh.name)
 
     async def test_inlet_restores_paths(self):
         await self.run_outlet("MEDIA:/opt/data/fox.png and MEDIA:/opt/data/music/song.mp3")

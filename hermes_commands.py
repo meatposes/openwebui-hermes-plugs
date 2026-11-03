@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.0.0
+version: 1.2.0
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -26,6 +26,113 @@ log = logging.getLogger(__name__)
 
 _MEDIA_TYPES = {"image", "audio", "video"}
 _TEXT_LIMIT = 20000
+
+def _icon(shapes: str) -> str:
+    """Button icon as an SVG data URL. Mid grey stroke reads on light and dark themes."""
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8a8f98" '
+           'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + shapes + '</svg>')
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+
+
+# Same Hermes file version -> same Open WebUI file id, so "My files" downloads each file once.
+_MYFILES_NS = uuid.UUID("0b6a3f4e-2d1c-4f5a-9e8b-7c6d5e4f3a21")
+
+# Side panel script, a copy of web/panel.js (tests check they match). Sent with each result as an
+# Open WebUI "execute" event, so the panel works without web/loader.js installed.
+PANEL_JS = r"""// Hermes side panel: one scrollable, closable drawer on the right. Shared by the Hermes Commands
+// action (sent as an Open WebUI "execute" event) and web/loader.js (sidebar Files entry).
+(() => {
+  if (window.hermesPanel) return;
+  const css = `
+#hermes-panel-back{position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.32);opacity:0;transition:opacity .15s}
+#hermes-panel-back.on{opacity:1}
+#hermes-panel{position:fixed;top:0;right:0;bottom:0;z-index:9999;width:min(600px,100vw);display:flex;flex-direction:column;
+  background:#fff;color:#1f2328;box-shadow:-10px 0 28px rgba(0,0,0,.18);transform:translateX(102%);transition:transform .18s ease;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
+#hermes-panel.on{transform:none}
+html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px rgba(0,0,0,.5)}
+#hermes-panel .hp-head{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 16px;border-bottom:1px solid rgba(128,128,128,.25)}
+#hermes-panel .hp-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 15px/1.3 system-ui,sans-serif}
+#hermes-panel .hp-close{border:0;background:transparent;color:inherit;width:34px;height:34px;border-radius:8px;cursor:pointer;
+  display:grid;place-items:center}
+#hermes-panel .hp-close:hover{background:rgba(128,128,128,.15)}
+#hermes-panel .hp-close:focus-visible{outline:2px solid #4c8dff;outline-offset:1px}
+#hermes-panel iframe{flex:1;min-height:0;width:100%;border:0;background:transparent}
+#hermes-panel .hp-msg{padding:18px 16px;font:14px/1.5 system-ui,sans-serif;opacity:.75}
+@media (prefers-reduced-motion:reduce){#hermes-panel,#hermes-panel-back{transition:none}}`;
+  let back, panel, title, body, lastFocus;
+
+  function build() {
+    if (panel) return;
+    const style = document.createElement("style");
+    style.id = "hermes-panel-style";
+    style.textContent = css;
+    document.head.appendChild(style);
+    back = document.createElement("div");
+    back.id = "hermes-panel-back";
+    back.addEventListener("click", close);
+    panel = document.createElement("aside");
+    panel.id = "hermes-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.innerHTML = '<div class="hp-head"><div class="hp-title"></div><button type="button" class="hp-close" aria-label="Close">' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+      '<path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="hp-body" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>';
+    title = panel.querySelector(".hp-title");
+    body = panel.querySelector(".hp-body");
+    panel.querySelector(".hp-close").addEventListener("click", close);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && panel.classList.contains("on")) close(); });
+    document.body.append(back, panel);
+  }
+
+  function show(text) {
+    build();
+    title.textContent = text;
+    if (!panel.classList.contains("on")) {
+      lastFocus = document.activeElement;
+      back.style.display = panel.style.display = "";
+      requestAnimationFrame(() => { back.classList.add("on"); panel.classList.add("on"); });
+      panel.querySelector(".hp-close").focus({ preventScroll: true });
+    }
+  }
+
+  function message(text, note) {
+    show(text);
+    body.innerHTML = "";
+    const p = document.createElement("div");
+    p.className = "hp-msg";
+    p.textContent = note;
+    body.appendChild(p);
+  }
+
+  function open(text, html) {
+    show(text);
+    body.innerHTML = "";
+    const frame = document.createElement("iframe");
+    frame.title = text;
+    // The card repeats its title; the panel header already shows it.
+    frame.srcdoc = String(html).replace(/<h3>[\s\S]*?<\/h3>/, "");
+    frame.addEventListener("load", () => {
+      try {
+        const doc = frame.contentDocument;
+        doc.documentElement.classList.add(document.documentElement.classList.contains("dark") ? "dark" : "light");
+        doc.querySelectorAll("a[href]").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+      } catch (e) { /* cross-origin frame: leave it as is */ }
+    });
+    body.appendChild(frame);
+  }
+
+  function close() {
+    if (!panel) return;
+    back.classList.remove("on");
+    panel.classList.remove("on");
+    setTimeout(() => { if (!panel.classList.contains("on")) { back.style.display = panel.style.display = "none"; } }, 200);
+    if (lastFocus && lastFocus.focus) lastFocus.focus({ preventScroll: true });
+  }
+
+  window.hermesPanel = { open, close, loading: (t) => message(t, "Loading…"), error: message };
+})();
+"""
 
 
 class CommandError(Exception):
@@ -100,6 +207,10 @@ def card(title: str, body: str) -> str:
         "<!doctype html><html><head><meta charset='utf-8'><style>"
         ":root{color-scheme:light dark;--fg:#1f2328;--muted:#656d76;--line:#d0d7de;--bg:#ffffff;--chip:#f6f8fa}"
         "@media (prefers-color-scheme:dark){:root{--fg:#e6edf3;--muted:#9198a1;--line:#3d444d;--bg:#0d1117;--chip:#161b22}}"
+        # The side panel marks the card with Open WebUI's own theme, which can differ from the system one.
+        ":root.light{color-scheme:light;--fg:#1f2328;--muted:#656d76;--line:#d0d7de;--bg:#ffffff;--chip:#f6f8fa}"
+        ":root.dark{color-scheme:dark;--fg:#e6edf3;--muted:#9198a1;--line:#3d444d;--bg:#0d1117;--chip:#161b22}"
+        "a{color:#2f6fed}:root.dark a{color:#6ea8ff}"
         "body{margin:0;padding:12px 14px;font:13px/1.45 system-ui,sans-serif;color:var(--fg);background:var(--bg)}"
         "h3{margin:0 0 8px;font-size:14px}table{border-collapse:collapse;width:100%}"
         "th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}"
@@ -228,6 +339,7 @@ HELP = [
     ("memory", "Hermes's memory files (MEMORY.md, USER.md)"),
     ("memory add <text>", "Append a line to MEMORY.md"),
     ("insights [days]", "Token and cost totals per day (default 7 days), by model, top skills"),
+    ("myfiles", "Files Hermes made for you and files you attached, newest first, as download links"),
     ("files [path]", "List a folder on the Hermes server"),
     ("file <path>", "Show a text file, or bring an image/audio/video file into the chat"),
     ("workspaces", "Hermes's default folder and registered projects/repos"),
@@ -263,6 +375,11 @@ class Action:
             description="Comma-separated folders files/file/memory may read. Empty = this profile's own folder "
             "only (for the default profile: its folder minus other profiles' folders).",
         )
+        myfiles_max_mb: int = Field(
+            default=200,
+            title="My Files: Max File Size (MB)",
+            description="Larger files are listed without a download link.",
+        )
         profile: str = Field(
             default="",
             title="Hermes Profile (optional)",
@@ -271,14 +388,20 @@ class Action:
         show_in: str = Field(
             default="panel",
             title="Show Results In",
-            description="'panel': a chip under the reply that opens the result in a window you can close. "
-            "'inline': a card at the top of the reply.",
+            description="'panel': a side panel that opens straight away, scrolls, and closes with X or Esc. "
+            "'chip': a chip under the reply that opens the result in a window. 'inline': a card at the top of the reply.",
         )
 
     actions = [
-        {"id": "command", "name": "Hermes command"},
-        {"id": "steps", "name": "Hermes steps"},
-        {"id": "usage", "name": "Hermes usage"},
+        {"id": "command", "name": "Hermes command", "icon_url": _icon(
+            '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>')},
+        {"id": "myfiles", "name": "My files", "icon_url": _icon(
+            '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>')},
+        {"id": "steps", "name": "Hermes steps", "icon_url": _icon(
+            '<path d="M3 6l2 2 3-3M3 13l2 2 3-3"/><line x1="11" y1="7" x2="21" y2="7"/>'
+            '<line x1="11" y1="14" x2="21" y2="14"/><line x1="11" y1="20" x2="21" y2="20"/>')},
+        {"id": "usage", "name": "Hermes usage", "icon_url": _icon(
+            '<line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="8"/><line x1="18" y1="20" x2="18" y2="4"/>')},
     ]
 
     def __init__(self):
@@ -769,6 +892,45 @@ class Action:
         return card(f"Files: {data.get('path') or path}", badge + table(["Path", "Bytes", "Modified"], rows)
                     + "<p class='muted'>Open one with: file &lt;path&gt;. List a folder with: files &lt;path&gt;</p>")
 
+    async def cmd_myfiles(self, ctx, arg):
+        """outputs/ and uploads/ of this profile, newest first, each file a download link."""
+        home = self._home(ctx["profile"])
+        found, folders = [], []
+        for sub in ("outputs", "uploads"):
+            try:
+                data = await self._dash("GET", "/api/files", ctx["profile"], params={"path": f"{home}/{sub}"})
+            except CommandError:
+                continue
+            for e in data.get("entries") or []:
+                (folders if e.get("is_directory") else found).append(e)
+        found.sort(key=lambda e: float(e.get("mtime") or 0), reverse=True)
+        limit = self.valves.myfiles_max_mb * 1024 * 1024
+        rows = []
+        for e in found[:40]:
+            path, size = str(e.get("path")), int(e.get("size") or 0)
+            name = esc(path.rsplit("/", 1)[-1])
+            where = "attached" if f"{home}/uploads/" in path else "made for you"
+            if size <= limit:
+                file_id = await self._cached_file(ctx, path, size, e.get("mtime"))
+                link = f"<a href='/api/v1/files/{file_id}/content?attachment=true'>{name}</a>"
+            else:
+                link = f"{name} <span class='muted'>(too big here: file {esc(path)})</span>"
+            rows.append([link, esc(where), esc(num(size)), esc(when(e.get("mtime")))])
+        extra = "".join(f"<p class='muted'>Folder: files {esc(f.get('path'))}</p>" for f in folders)
+        body = table(["File", "From", "Bytes", "Modified"], rows) if rows else "<p class='muted'>No files yet.</p>"
+        return card("My files", body + extra)
+
+    async def _cached_file(self, ctx, path: str, size: int, mtime) -> str:
+        """Open WebUI file id for this exact version of a Hermes file, downloading it only the first time."""
+        from open_webui.models.files import Files
+
+        file_id = str(uuid.uuid5(_MYFILES_NS, f"{ctx['user_id']}\n{path}\n{size}\n{mtime}"))
+        if not await Files.get_file_by_id(file_id):
+            data, content_type = await self._dash("GET", "/api/files/download", ctx["profile"], params={"path": path},
+                                                  raw=True, timeout=120)
+            await self._store_file(ctx, path, data, content_type or mimetypes.guess_type(path)[0] or "", file_id)
+        return file_id
+
     async def cmd_workspaces(self, ctx, arg):
         data = await self._dash("GET", "/api/chat/workspaces", ctx["profile"])
         rows = [[f"<code>{esc(x.get('path') or x.get('cwd') or x)}</code>", esc(x.get('name') or x.get('label') or "")]
@@ -807,13 +969,13 @@ class Action:
         return card(path, f"<pre>{esc(text[:_TEXT_LIMIT])}</pre>"
                     + ("<p class='muted'>Truncated.</p>" if len(text) > _TEXT_LIMIT else ""))
 
-    async def _store_file(self, ctx, path: str, data: bytes, content_type: str) -> str:
+    async def _store_file(self, ctx, path: str, data: bytes, content_type: str, file_id: str = "") -> str:
         import io
 
         from open_webui.models.files import FileForm, Files
         from open_webui.storage.provider import Storage
 
-        file_id = str(uuid.uuid4())
+        file_id = file_id or str(uuid.uuid4())
         name = path.rsplit("/", 1)[-1]
         _, stored = await asyncio.to_thread(Storage.upload_file, io.BytesIO(data), f"{file_id}_{name}",
                                             {"OpenWebUI-User-Id": ctx["user_id"], "OpenWebUI-File-Id": file_id})
@@ -887,7 +1049,7 @@ class Action:
         "help": "cmd_help", "usage": "cmd_usage", "steps": "cmd_steps", "last": "cmd_last", "resume": "cmd_last",
         "steer": "cmd_steer", "stop": "cmd_stop", "title": "cmd_title", "model": "cmd_model", "todos": "cmd_todos",
         "todo": "cmd_todos", "cron": "cmd_cron", "tasks": "cmd_cron", "skills": "cmd_skills", "skill": "cmd_skill",
-        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file",
+        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file", "myfiles": "cmd_myfiles",
         "sessions": "cmd_sessions", "import": "cmd_import", "status": "cmd_status", "workspaces": "cmd_workspaces",
         "forget": "cmd_forget",
     }
@@ -904,7 +1066,7 @@ class Action:
 
     async def action(self, body: dict, __user__: Optional[dict] = None, __event_emitter__=None, __event_call__=None,
                      __model__: Optional[dict] = None, __id__: Optional[str] = None, __request__=None) -> None:
-        line = {"steps": "steps", "usage": "usage"}.get(__id__ or "", "")
+        line = {"steps": "steps", "usage": "usage", "myfiles": "myfiles"}.get(__id__ or "", "")
         if not line:
             if not __event_call__:
                 return
@@ -916,6 +1078,11 @@ class Action:
             if not answer or not isinstance(answer, str):
                 return
             line = answer
+        if __event_emitter__ and not body.get("hermes_panel_data") and self.valves.show_in.strip().lower() == "panel":
+            word = line.strip().split()[0].lower().lstrip("/") if line.strip() else ""
+            label = {"myfiles": "My files", "steps": "Hermes steps", "usage": "Hermes usage"}.get(word, f"Hermes: {line.strip()[:60]}")
+            await __event_emitter__({"type": "execute", "data": {
+                "code": PANEL_JS + f"window.hermesPanel.loading({json.dumps(label)});"}})
         try:
             root, key, profile = await self._api(__model__)
             session_cache: dict = {}
@@ -935,18 +1102,24 @@ class Action:
         except Exception as exc:
             log.exception("Hermes Commands: '%s' failed", line)
             html_card = card(f"Hermes: {line.strip()[:60]}", f"<p>Something went wrong: {esc(exc)}</p>")
+        title = html.unescape(re.search(r"<h3>(.*?)</h3>", html_card, re.S).group(1))
+        if body.get("hermes_panel_data"):
+            return {"title": title, "html": html_card}  # web/loader.js draws it in its own panel
         if not __event_emitter__:
             return
-        if self.valves.show_in.strip().lower() == "inline":
+        mode = self.valves.show_in.strip().lower()
+        if mode == "panel":
+            await __event_emitter__({"type": "execute", "data": {
+                "code": PANEL_JS + f"window.hermesPanel.open({json.dumps(title)}, {json.dumps(html_card)});"}})
+            return
+        if mode == "inline":
             await __event_emitter__({"type": "embeds", "data": {"embeds": [html_card]}})
             return
         if re.search(r"<(audio|video)\b", html_card):
             # Players need HTML, and the source window shows HTML only about 150px tall.
             await __event_emitter__({"type": "embeds", "data": {"embeds": [html_card]}})
             return
-        # A source chip sits under the reply, next to the buttons; clicking it opens the result in a
-        # window with a close button.
-        title = html.unescape(re.search(r"<h3>(.*?)</h3>", html_card, re.S).group(1))
+        # 'chip': a source chip under the reply; clicking it opens the result in a window.
         await __event_emitter__({"type": "source", "data": {
             "source": {"id": f"hermes-{int(time.time() * 1000)}", "name": title},
             "document": [to_markdown(html_card)],

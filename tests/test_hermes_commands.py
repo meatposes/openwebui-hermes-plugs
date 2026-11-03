@@ -12,7 +12,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from hermes_commands import Action, CommandError, card, derive_session_id, parse_tool_calls, table, to_markdown, when  # noqa: E402
+from hermes_commands import PANEL_JS, Action, CommandError, card, derive_session_id, parse_tool_calls, table, to_markdown, when  # noqa: E402
 
 
 class Helpers(unittest.TestCase):
@@ -76,6 +76,40 @@ class PathGuard(unittest.TestCase):
     def test_folders_setting_widens_access(self):
         self.action.valves.file_folders = "/srv/shared"
         self.assertEqual(self.action._check_path({"profile": "work"}, "/srv/shared/a.txt"), "/srv/shared/a.txt")
+
+
+class SidePanel(unittest.IsolatedAsyncioTestCase):
+    def test_panel_script_matches_web_copy(self):
+        web = os.path.join(os.path.dirname(__file__), "..", "web")
+        with open(os.path.join(web, "panel.js")) as fh:
+            self.assertEqual(PANEL_JS, fh.read())
+        with open(os.path.join(web, "loader.js")) as fh:
+            self.assertTrue(fh.read().startswith(PANEL_JS))
+
+    async def test_results_open_in_panel_or_return_to_sidebar(self):
+        action = Action()
+
+        async def api(model):
+            return "http://hermes/v1", "key", "kid"
+
+        async def run(line, ctx):
+            return card("My files", "<p>ok</p>")
+
+        action._api, action.run_command = api, run
+        events = []
+
+        async def emit(event):
+            events.append(event)
+
+        await action.action({"chat_id": "c"}, __event_emitter__=emit, __id__="myfiles")
+        self.assertEqual([e["type"] for e in events], ["execute", "execute"])
+        self.assertIn('hermesPanel.loading("My files")', events[0]["data"]["code"])
+        self.assertIn('hermesPanel.open("My files", ', events[1]["data"]["code"])
+        events.clear()
+        out = await action.action({"hermes_panel_data": True}, __event_emitter__=emit, __id__="myfiles")
+        self.assertEqual(events, [])
+        self.assertEqual(out["title"], "My files")
+        self.assertIn("<p>ok</p>", out["html"])
 
 
 class Dispatch(unittest.TestCase):
