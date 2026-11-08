@@ -116,7 +116,12 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
       try {
         const doc = frame.contentDocument;
         doc.documentElement.classList.add(document.documentElement.classList.contains("dark") ? "dark" : "light");
-        doc.querySelectorAll("a[href]").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        doc.querySelectorAll("a[href]:not([data-hermes-cmd])").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        // Folder and file links in a Files listing: web/loader.js runs them and redraws the panel.
+        doc.querySelectorAll("[data-hermes-cmd]").forEach((el) => el.addEventListener("click", (e) => {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent("hermes-panel-command", { detail: el.getAttribute("data-hermes-cmd") }));
+        }));
       } catch (e) { /* cross-origin frame: leave it as is */ }
     });
     body.appendChild(frame);
@@ -319,6 +324,9 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
     return f"<table><tr>{head}</tr>{body}</table>"
 
 
+# Commands the sidebar Files panel may send by itself (it navigates without a dialog).
+_PANEL_COMMANDS = ("browse", "fetch", "myfiles")
+
 HELP = [
     ("usage", "Tokens, cost, calls and messages for this chat's Hermes session"),
     ("steps [all]", "Tool calls with arguments and results for the last turn (all: whole chat), plus subagents"),
@@ -341,6 +349,7 @@ HELP = [
     ("insights [days]", "Token and cost totals per day (default 7 days), by model, top skills"),
     ("myfiles", "Files Hermes made for you and files you attached, newest first, as download links"),
     ("files [path]", "List a folder on the Hermes server"),
+    ("browse [path]", "Browse this profile's folders: click a folder to open it, a file to download it"),
     ("file <path>", "Show a text file, or bring an image/audio/video file into the chat"),
     ("workspaces", "Hermes's default folder and registered projects/repos"),
     ("sessions [search]", "Recent Hermes sessions from every surface (CLI, Telegram, Desktop, ...)"),
@@ -374,6 +383,13 @@ class Action:
             title="Browsable Folders (optional)",
             description="Comma-separated folders files/file/memory may read. Empty = this profile's own folder "
             "only (for the default profile: its folder minus other profiles' folders).",
+        )
+        user_profiles: str = Field(
+            default="",
+            title="Sidebar Files: Profile per User (optional)",
+            description="Comma-separated user=profile pairs for the sidebar Files panel, e.g. 'alice=default, "
+            "bob=work'. A user is matched by Open WebUI username, email or name. Unlisted users get the "
+            "profile of the Hermes model the panel uses.",
         )
         myfiles_max_mb: int = Field(
             default=200,
@@ -892,6 +908,66 @@ class Action:
         return card(f"Files: {data.get('path') or path}", badge + table(["Path", "Bytes", "Modified"], rows)
                     + "<p class='muted'>Open one with: file &lt;path&gt;. List a folder with: files &lt;path&gt;</p>")
 
+    def _user_profile(self, user: Optional[dict]) -> str:
+        """Hermes profile for this Open WebUI user from the Profile per User setting, or ''."""
+        names = {str((user or {}).get(k) or "").strip().lower() for k in ("username", "email", "name")}
+        email = str((user or {}).get("email") or "").lower()
+        if "@" in email:
+            names.add(email.split("@", 1)[0])
+        names.discard("")
+        for pair in self.valves.user_profiles.split(","):
+            who, _, profile = pair.partition("=")
+            if who.strip().lower() in names and profile.strip():
+                return profile.strip()
+        return ""
+
+    def _browse_link(self, command: str, label: str) -> str:
+        return f"<a href='#' data-hermes-cmd='{esc(command)}'>{label}</a>"
+
+    async def cmd_browse(self, ctx, arg):
+        """One folder of this profile's files for the side panel: folders open in place, files download."""
+        home = self._home(ctx["profile"])
+        path = self._check_path(ctx, arg.strip() or home)
+        data = await self._dash("GET", "/api/files", ctx["profile"], params={"path": path})
+        path = str(data.get("path") or path).rstrip("/") or "/"
+        entries = [e for e in data.get("entries") or [] if not str(e.get("path", "")).rsplit("/", 1)[-1].startswith(".")]
+        if ctx["profile"] in ("", "default") and not self.valves.file_folders.strip():
+            entries = [e for e in entries if not str(e.get("path", "")).startswith("/opt/data/profiles")]
+        roots = [r.strip().rstrip("/") for r in self.valves.file_folders.split(",") if r.strip()] or [home]
+        root = next((r for r in roots if path == r or path.startswith(r + "/")), home)
+        crumbs, walked = [self._browse_link(f"browse {root}", esc(root))], root
+        for part in [p for p in path[len(root):].split("/") if p]:
+            walked += "/" + part
+            crumbs.append(self._browse_link(f"browse {walked}", esc(part)))
+        rows = []
+        if path != root:
+            rows.append([self._browse_link(f"browse {path.rsplit('/', 1)[0] or '/'}", "&#8593; Up"), "", ""])
+        key = lambda e: str(e.get("path", "")).lower()  # noqa: E731
+        for e in sorted((e for e in entries if e.get("is_directory")), key=key):
+            p = str(e.get("path"))
+            rows.append([self._browse_link(f"browse {p}", "📁 " + esc(p.rsplit("/", 1)[-1])), "", esc(when(e.get("mtime")))])
+        for e in sorted((e for e in entries if not e.get("is_directory")), key=key):
+            p = str(e.get("path"))
+            rows.append([self._browse_link(f"fetch {p}", "📄 " + esc(p.rsplit("/", 1)[-1])), esc(num(e.get("size"))),
+                         esc(when(e.get("mtime")))])
+        listing = table(["Name", "Bytes", "Modified"], rows) if rows else "<p class='muted'>This folder is empty.</p>"
+        return card(f"Files: {path}", "<p class='crumbs'>" + " / ".join(crumbs) + "</p>" + listing)
+
+    async def cmd_fetch(self, ctx, arg):
+        """Download one file from the panel: cached in Open WebUI, then handed to the browser."""
+        path = self._check_path(ctx, arg.strip())
+        folder, name = path.rsplit("/", 1)
+        data = await self._dash("GET", "/api/files", ctx["profile"], params={"path": folder or "/"})
+        entry = next((e for e in data.get("entries") or [] if e.get("path") == path and not e.get("is_directory")), None)
+        if not entry:
+            raise CommandError(f"There is no file {path}.")
+        size = int(entry.get("size") or 0)
+        if size > self.valves.myfiles_max_mb * 1024 * 1024:
+            raise CommandError(f"{name} is {num(size)} bytes, over the My Files size limit; open it with: file {path}")
+        file_id = await self._cached_file(ctx, path, size, entry.get("mtime"))
+        url = f"/api/v1/files/{file_id}/content?attachment=true"
+        return card(f"Download: {name}", f"<p><a href='{url}' data-hermes-download='{url}'>{esc(name)}</a></p>")
+
     async def cmd_myfiles(self, ctx, arg):
         """outputs/ and uploads/ of this profile, newest first, each file a download link."""
         home = self._home(ctx["profile"])
@@ -1049,7 +1125,7 @@ class Action:
         "help": "cmd_help", "usage": "cmd_usage", "steps": "cmd_steps", "last": "cmd_last", "resume": "cmd_last",
         "steer": "cmd_steer", "stop": "cmd_stop", "title": "cmd_title", "model": "cmd_model", "todos": "cmd_todos",
         "todo": "cmd_todos", "cron": "cmd_cron", "tasks": "cmd_cron", "skills": "cmd_skills", "skill": "cmd_skill",
-        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file", "myfiles": "cmd_myfiles",
+        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file", "myfiles": "cmd_myfiles", "browse": "cmd_browse", "fetch": "cmd_fetch",
         "sessions": "cmd_sessions", "import": "cmd_import", "status": "cmd_status", "workspaces": "cmd_workspaces",
         "forget": "cmd_forget",
     }
@@ -1067,6 +1143,9 @@ class Action:
     async def action(self, body: dict, __user__: Optional[dict] = None, __event_emitter__=None, __event_call__=None,
                      __model__: Optional[dict] = None, __id__: Optional[str] = None, __request__=None) -> None:
         line = {"steps": "steps", "usage": "usage", "myfiles": "myfiles"}.get(__id__ or "", "")
+        panel_cmd = str(body.get("hermes_command") or "").strip() if body.get("hermes_panel_data") else ""
+        if panel_cmd and panel_cmd.split()[0].lower() in _PANEL_COMMANDS:
+            line = panel_cmd  # the sidebar Files panel navigating: browse <folder>, fetch <file>
         if not line:
             if not __event_call__:
                 return
@@ -1085,6 +1164,8 @@ class Action:
                 "code": PANEL_JS + f"window.hermesPanel.loading({json.dumps(label)});"}})
         try:
             root, key, profile = await self._api(__model__)
+            if body.get("hermes_panel_data"):
+                profile = self._user_profile(__user__) or profile
             session_cache: dict = {}
 
             async def session():
@@ -1104,7 +1185,9 @@ class Action:
             html_card = card(f"Hermes: {line.strip()[:60]}", f"<p>Something went wrong: {esc(exc)}</p>")
         title = html.unescape(re.search(r"<h3>(.*?)</h3>", html_card, re.S).group(1))
         if body.get("hermes_panel_data"):
-            return {"title": title, "html": html_card}  # web/loader.js draws it in its own panel
+            download = re.search(r"data-hermes-download='([^']+)'", html_card)
+            # web/loader.js draws it in its own panel, or starts the download.
+            return {"title": title, "html": html_card, "download": html.unescape(download.group(1)) if download else ""}
         if not __event_emitter__:
             return
         mode = self.valves.show_in.strip().lower()

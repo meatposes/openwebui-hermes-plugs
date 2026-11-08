@@ -112,6 +112,91 @@ class SidePanel(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<p>ok</p>", out["html"])
 
 
+class FilesBrowser(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.action = Action()
+        self.calls = []
+
+        async def dash(method, path, profile, params=None, **kw):
+            self.calls.append((path, profile, (params or {}).get("path")))
+            folder = (params or {}).get("path")
+            listing = {
+                "/opt/data": [{"path": "/opt/data/outputs", "is_directory": True, "mtime": 1},
+                              {"path": "/opt/data/.cache", "is_directory": True, "mtime": 1},
+                              {"path": "/opt/data/profiles", "is_directory": True, "mtime": 1},
+                              {"path": "/opt/data/b.txt", "is_directory": False, "size": 5, "mtime": 1},
+                              {"path": "/opt/data/A.png", "is_directory": False, "size": 9, "mtime": 1}],
+                "/opt/data/outputs": [{"path": "/opt/data/outputs/big.mp4", "is_directory": False,
+                                       "size": 300 * 1024 * 1024, "mtime": 2}],
+            }
+            return {"path": folder, "entries": listing.get(folder, [])}
+
+        self.action._dash = dash
+
+    def test_user_profiles_match_username_email_or_name(self):
+        self.action.valves.user_profiles = "alice=default, Bob=work"
+        self.assertEqual(self.action._user_profile({"email": "alice@example.com"}), "default")
+        self.assertEqual(self.action._user_profile({"name": "bob"}), "work")
+        self.assertEqual(self.action._user_profile({"name": "someone"}), "")
+        self.assertEqual(self.action._user_profile(None), "")
+
+    async def test_browse_lists_folders_first_and_hides_dotfiles_and_profiles(self):
+        out = await self.action.cmd_browse({"profile": "default"}, "")
+        self.assertIn("Files: /opt/data", out)
+        self.assertNotIn(".cache", out)
+        self.assertNotIn("/opt/data/profiles", out)
+        self.assertLess(out.index("outputs"), out.index("A.png"))
+        self.assertLess(out.index("A.png"), out.index("b.txt"))
+        self.assertIn("data-hermes-cmd='browse /opt/data/outputs'", out)
+        self.assertIn("data-hermes-cmd='fetch /opt/data/b.txt'", out)
+        self.assertNotIn("Up", out)
+
+    async def test_browse_subfolder_has_up_link_and_breadcrumb(self):
+        out = await self.action.cmd_browse({"profile": "default"}, "/opt/data/outputs")
+        self.assertIn("data-hermes-cmd='browse /opt/data'", out)
+        self.assertIn("Up", out)
+
+    async def test_browse_stays_inside_the_profile(self):
+        with self.assertRaises(CommandError):
+            await self.action.cmd_browse({"profile": "work"}, "/opt/data/outputs")
+
+    async def test_fetch_refuses_files_over_the_limit(self):
+        with self.assertRaises(CommandError):
+            await self.action.cmd_fetch({"profile": "default"}, "/opt/data/outputs/big.mp4")
+
+    async def test_fetch_returns_a_download_link(self):
+        async def cached(ctx, path, size, mtime):
+            return "fid"
+
+        self.action._cached_file = cached
+        out = await self.action.cmd_fetch({"profile": "default"}, "/opt/data/b.txt")
+        self.assertIn("data-hermes-download='/api/v1/files/fid/content?attachment=true'", out)
+
+    async def test_panel_runs_only_panel_commands_and_uses_the_users_profile(self):
+        seen = []
+
+        async def api(model):
+            return "http://hermes/v1", "key", "work"
+
+        async def run(line, ctx):
+            seen.append((line, ctx["profile"]))
+            return card("Files", "<a data-hermes-download='/api/v1/files/x/content?attachment=true'>x</a>")
+
+        self.action._api, self.action.run_command = api, run
+        self.action.valves.user_profiles = "alice=default"
+        user = {"email": "alice@example.com"}
+        out = await self.action.action({"hermes_panel_data": True, "hermes_command": "fetch /opt/data/b.txt"},
+                                       __user__=user, __id__="myfiles")
+        self.assertEqual(seen[-1], ("fetch /opt/data/b.txt", "default"))
+        self.assertEqual(out["download"], "/api/v1/files/x/content?attachment=true")
+        await self.action.action({"hermes_panel_data": True, "hermes_command": "steer do something"},
+                                 __user__=user, __id__="myfiles")
+        self.assertEqual(seen[-1], ("myfiles", "default"))
+        await self.action.action({"hermes_panel_data": True, "hermes_command": "browse"}, __user__={"name": "x"},
+                                 __id__="myfiles")
+        self.assertEqual(seen[-1], ("browse", "work"))
+
+
 class Dispatch(unittest.TestCase):
     def test_unknown_and_help(self):
         action = Action()

@@ -75,7 +75,12 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
       try {
         const doc = frame.contentDocument;
         doc.documentElement.classList.add(document.documentElement.classList.contains("dark") ? "dark" : "light");
-        doc.querySelectorAll("a[href]").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        doc.querySelectorAll("a[href]:not([data-hermes-cmd])").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        // Folder and file links in a Files listing: web/loader.js runs them and redraws the panel.
+        doc.querySelectorAll("[data-hermes-cmd]").forEach((el) => el.addEventListener("click", (e) => {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent("hermes-panel-command", { detail: el.getAttribute("data-hermes-cmd") }));
+        }));
       } catch (e) { /* cross-origin frame: leave it as is */ }
     });
     body.appendChild(frame);
@@ -111,23 +116,43 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
     }
   }
 
-  async function openFiles(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    window.hermesPanel.loading("My files");
+  // Runs a Files panel command (browse <folder>, fetch <file>) and shows the result or starts the download.
+  async function run(command, label) {
+    if (label) window.hermesPanel.loading(label);
     try {
       const r = await fetch("/api/chat/actions/hermes_commands.myfiles", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer " + localStorage.token },
-        body: JSON.stringify({ model: model.id, chat_id: "", id: "", session_id: "", messages: [], hermes_panel_data: true }),
+        body: JSON.stringify({ model: model.id, chat_id: "", id: "", session_id: "", messages: [],
+          hermes_panel_data: true, hermes_command: command }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.html) throw new Error(data.detail || "Open WebUI answered " + r.status);
-      window.hermesPanel.open(data.title || "My files", data.html);
+      if (data.download) {
+        const a = document.createElement("a");
+        a.href = data.download;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      window.hermesPanel.open(data.title || "Files", data.html);
     } catch (err) {
-      window.hermesPanel.error("My files", "Could not load your files. " + err.message);
+      window.hermesPanel.error("Files", "Could not load your files. " + err.message);
     }
   }
+
+  function openFiles(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    run("browse", "Files");
+  }
+
+  window.addEventListener("hermes-panel-command", (e) => {
+    const command = String(e.detail || "");
+    if (model && /^(browse|fetch)( |$)/.test(command)) run(command, command.startsWith("browse") ? "Files" : "");
+  });
 
   function addEntries() {
     // Copy the look of a built-in sidebar entry (Notes, else Workspace, else Search), collapsed or open.

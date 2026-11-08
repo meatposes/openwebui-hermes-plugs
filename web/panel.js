@@ -75,7 +75,12 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
       try {
         const doc = frame.contentDocument;
         doc.documentElement.classList.add(document.documentElement.classList.contains("dark") ? "dark" : "light");
-        doc.querySelectorAll("a[href]").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        doc.querySelectorAll("a[href]:not([data-hermes-cmd])").forEach((a) => { if (!a.getAttribute("href").includes("attachment=true")) a.target = "_blank"; });
+        // Folder and file links in a Files listing: web/loader.js runs them and redraws the panel.
+        doc.querySelectorAll("[data-hermes-cmd]").forEach((el) => el.addEventListener("click", (e) => {
+          e.preventDefault();
+          window.dispatchEvent(new CustomEvent("hermes-panel-command", { detail: el.getAttribute("data-hermes-cmd") }));
+        }));
       } catch (e) { /* cross-origin frame: leave it as is */ }
     });
     body.appendChild(frame);

@@ -329,6 +329,7 @@ There is also a **My files** button. Results open in a side panel straight away;
 | `insights [days]` | Tokens and cost per day, by model, top skills |
 | `files [path]`, `file <path>`, `workspaces` | Browse the Hermes server's files (with git status); open text, images, audio, video; other files come as downloads |
 | `sessions [search]`, `import <id>` | Hermes sessions from every surface (CLI, Telegram, Desktop...), copy one into a new chat |
+| `browse [path]` | This profile's folders in the side panel: click a folder to open it, **Up** or the path at the top to go back, a file to download it. Hidden (dot) files are left out |
 | `myfiles` (also its own **My files** button) | Files Hermes made for you (`outputs/`) and files you attached (`uploads/`), newest first, as downloads |
 | `status` | Hermes version, profile, model, toolsets, scheduled tasks |
 | `forget` | Delete this chat's Hermes session (asks first). Open WebUI's own delete leaves the Hermes session behind. |
@@ -354,11 +355,12 @@ All optional.
 | Hermes Profile | (empty) | Empty reads it from the connection URL (`/p/<profile>/v1`), else `default`. |
 | Browsable Folders | (empty) | Folders `files`, `file` and `memory` may read. Empty = this profile's own folder only; other profiles' folders are always hidden unless listed here. |
 | Show Results In | `panel` | `panel`: a side panel that opens at once, scrolls, and closes with X, Esc or a click outside. `chip`: a source chip under the reply. `inline`: a card at the top of the reply. |
-| My Files: Max File Size (MB) | 200 | Larger files are listed without a download link. |
+| My Files: Max File Size (MB) | 200 | Larger files are listed without a download link, and `browse` will not download them. |
+| Sidebar Files: Profile per User | (empty) | `user=profile` pairs, comma-separated (for example `alice=default, bob=work`), matched by Open WebUI username, email or name. The sidebar Files entry then shows each person their own Hermes profile's files, whichever Hermes model it borrows. Empty = the profile of that model's connection. |
 
 ### Optional: a Files entry in the sidebar
 
-`web/loader.js` adds a **Files** entry under Notes in Open WebUI's sidebar. It opens the same side panel as the My files button. It only appears for people who have a model with Hermes Commands attached, and it uses their own Open WebUI login.
+`web/loader.js` adds a **Files** entry under Notes in Open WebUI's sidebar. It opens a folder browser in the side panel (the `browse` command), starting at the profile's own folder. It only appears for people who have a model with Hermes Commands attached, and it uses their own Open WebUI login. It borrows the first such model it finds, so if several people share one Open WebUI, set **Sidebar Files: Profile per User** so nobody browses someone else's profile.
 
 Open WebUI runs `/static/loader.js` on every page and copies it from `/app/build/static/` when the container starts. Mount the file there (read-only), then recreate the container:
 
