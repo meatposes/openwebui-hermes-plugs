@@ -9,6 +9,7 @@
   background:#fff;color:#1f2328;box-shadow:-10px 0 28px rgba(0,0,0,.18);transform:translateX(102%);transition:transform .18s ease;
   padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
 #hermes-panel.on{transform:none}
+#hermes-panel.wide{width:min(1280px,100vw)}
 html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px rgba(0,0,0,.5)}
 #hermes-panel .hp-head{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 16px;border-bottom:1px solid rgba(128,128,128,.25)}
 #hermes-panel .hp-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 15px/1.3 system-ui,sans-serif}
@@ -16,6 +17,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
   display:grid;place-items:center}
 #hermes-panel .hp-close:hover{background:rgba(128,128,128,.15)}
 #hermes-panel .hp-close:focus-visible{outline:2px solid #4c8dff;outline-offset:1px}
+@media (max-width:640px){#hermes-panel .hp-wide{display:none}}
 #hermes-panel iframe{flex:1;min-height:0;width:100%;border:0;background:transparent}
 #hermes-panel .hp-msg{padding:18px 16px;font:14px/1.5 system-ui,sans-serif;opacity:.75}
 @media (prefers-reduced-motion:reduce){#hermes-panel,#hermes-panel-back{transition:none}}`;
@@ -34,12 +36,22 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
     panel.id = "hermes-panel";
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.innerHTML = '<div class="hp-head"><div class="hp-title"></div><button type="button" class="hp-close" aria-label="Close">' +
+    panel.innerHTML = '<div class="hp-head"><div class="hp-title"></div>' +
+      '<button type="button" class="hp-close hp-wide" aria-label="Wider panel" title="Wider panel">' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+      '<path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></button>' +
+      '<button type="button" class="hp-close" aria-label="Close">' +
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
       '<path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="hp-body" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>';
     title = panel.querySelector(".hp-title");
     body = panel.querySelector(".hp-body");
-    panel.querySelector(".hp-close").addEventListener("click", close);
+    panel.querySelector(".hp-close:not(.hp-wide)").addEventListener("click", close);
+    // Wide view for long listings; remembered per browser.
+    try { if (localStorage.getItem("hermesPanelWide") === "1") panel.classList.add("wide"); } catch (e) { /* no storage */ }
+    panel.querySelector(".hp-wide").addEventListener("click", () => {
+      const wide = panel.classList.toggle("wide");
+      try { localStorage.setItem("hermesPanelWide", wide ? "1" : "0"); } catch (e) { /* no storage */ }
+    });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && panel.classList.contains("on")) close(); });
     document.body.append(back, panel);
   }
@@ -51,7 +63,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
       lastFocus = document.activeElement;
       back.style.display = panel.style.display = "";
       requestAnimationFrame(() => { back.classList.add("on"); panel.classList.add("on"); });
-      panel.querySelector(".hp-close").focus({ preventScroll: true });
+      panel.querySelector(".hp-close:not(.hp-wide)").focus({ preventScroll: true });
     }
   }
 
@@ -81,6 +93,23 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
           e.preventDefault();
           window.dispatchEvent(new CustomEvent("hermes-panel-command", { detail: el.getAttribute("data-hermes-cmd") }));
         }));
+        // Filter box: hides rows of this listing that do not contain the typed text.
+        const filter = doc.querySelector("[data-hermes-filter]");
+        if (filter) filter.addEventListener("input", () => {
+          const q = filter.value.trim().toLowerCase();
+          doc.querySelectorAll("tr").forEach((tr) => {
+            if (!tr.querySelector("th")) tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+          });
+        });
+        // Search box: asks the server again (Enter), for listings too long to send at once.
+        const search = doc.querySelector("[data-hermes-search]");
+        if (search) search.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const words = search.value.trim();
+          window.dispatchEvent(new CustomEvent("hermes-panel-command",
+            { detail: search.getAttribute("data-hermes-search") + " 1" + (words ? " " + words : "") }));
+        });
       } catch (e) { /* cross-origin frame: leave it as is */ }
     });
     body.appendChild(frame);
@@ -116,7 +145,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
     }
   }
 
-  // Runs a Files panel command (browse <folder>, fetch <file>) and shows the result or starts the download.
+  // Runs a Files panel command (browse <folder>, fetch <file>, owui [page] [search]) and shows the result or starts the download.
   async function run(command, label) {
     if (label) window.hermesPanel.loading(label);
     try {
@@ -151,7 +180,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
 
   window.addEventListener("hermes-panel-command", (e) => {
     const command = String(e.detail || "");
-    if (model && /^(browse|fetch)( |$)/.test(command)) run(command, command.startsWith("browse") ? "Files" : "");
+    if (model && /^(browse|fetch|owui)( |$)/.test(command)) run(command, command.startsWith("fetch") ? "" : "Files");
   });
 
   function addEntries() {

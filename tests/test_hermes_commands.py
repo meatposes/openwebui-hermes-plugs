@@ -197,6 +197,69 @@ class FilesBrowser(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen[-1], ("browse", "work"))
 
 
+class OpenWebUIFiles(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.action = Action()
+        self.asked = []
+        files = [
+            {"id": "f1", "filename": "generated-image.png", "created_at": 1793433973,
+             "meta": {"name": "generated-image.png", "content_type": "image/png", "size": 2048,
+                      "data": {"prompt": "a red <b>fox</b> in snow", "chat_id": "c9"}},
+             "chat": ("c9", "Fox pictures")},
+            {"id": "f2", "filename": "notes.pdf", "created_at": 1793433000,
+             "meta": {"name": "notes.pdf", "content_type": "application/pdf", "size": 10, "data": {}}, "chat": None},
+            {"id": "f3", "filename": "out.csv", "created_at": 1793432000,
+             "meta": {"name": "out.csv", "content_type": "text/csv", "size": 3, "data": {"hermes_path": "/opt/data/out.csv"}},
+             "chat": None},
+        ]
+
+        async def owui_files(user_id, query, skip, limit):
+            self.asked.append((user_id, query, skip, limit))
+            return files[skip:skip + limit + 1], (None if query else len(files))
+
+        self.action._owui_files = owui_files
+        self.action._OWUI_PAGE = 2
+
+    async def test_lists_only_the_signed_in_users_files_with_kind_chat_and_prompt(self):
+        out = await self.action.cmd_owui({"user_id": "u1"}, "")
+        self.assertEqual(self.asked[-1], ("u1", "", 0, 2))
+        self.assertIn("3 files, newest first", out)
+        self.assertIn("Generated", out)
+        self.assertIn("Upload", out)
+        self.assertIn("a red &lt;b&gt;fox&lt;/b&gt; in snow", out)
+        self.assertIn("<a href='/c/c9'>Fox pictures</a>", out)
+        self.assertIn("<img class='thumb' loading='lazy' alt='' src='/api/v1/files/f1/content'>", out)
+        self.assertIn("data-hermes-cmd='owui 2'", out)
+        self.assertNotIn("notes.pdf' class", out)
+        self.assertIn("class=on>Open WebUI", out)
+
+    async def test_second_page_and_search(self):
+        out = await self.action.cmd_owui({"user_id": "u1"}, "2")
+        self.assertEqual(self.asked[-1], ("u1", "", 2, 2))
+        self.assertIn("From Hermes", out)
+        self.assertIn("data-hermes-cmd='owui 1'", out)
+        self.assertNotIn("Older", out)
+        out = await self.action.cmd_owui({"user_id": "u1"}, "1 red fox")
+        self.assertEqual(self.asked[-1], ("u1", "red fox", 0, 2))
+        self.assertIn("Matches for <b>red fox</b>", out)
+        self.assertIn("data-hermes-cmd='owui 2 red fox'", out)
+        await self.action.cmd_owui({"user_id": "u1"}, "fox")
+        self.assertEqual(self.asked[-1], ("u1", "fox", 0, 2))
+
+    async def test_refuses_without_a_user(self):
+        with self.assertRaises(CommandError):
+            await self.action.cmd_owui({"user_id": ""}, "")
+
+    async def test_browse_shows_both_tabs(self):
+        async def dash(method, path, profile, params=None, **kw):
+            return {"path": "/opt/data", "entries": []}
+
+        self.action._dash = dash
+        out = await self.action.cmd_browse({"profile": "default"}, "")
+        self.assertIn("data-hermes-cmd='owui'", out)
+        self.assertIn("class=on>Hermes", out)
+
+
 class Dispatch(unittest.TestCase):
     def test_unknown_and_help(self):
         action = Action()

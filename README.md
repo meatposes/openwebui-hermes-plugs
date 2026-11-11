@@ -360,7 +360,7 @@ All optional.
 
 ### Optional: a Files entry in the sidebar
 
-`web/loader.js` adds a **Files** entry under Notes in Open WebUI's sidebar. It opens a folder browser in the side panel (the `browse` command), starting at the profile's own folder. It only appears for people who have a model with Hermes Commands attached, and it uses their own Open WebUI login. It borrows the first such model it finds, so if several people share one Open WebUI, set **Sidebar Files: Profile per User** so nobody browses someone else's profile.
+`web/loader.js` adds a **Files** entry under Notes in Open WebUI's sidebar. It opens the side panel with two tabs. **Hermes** is a folder browser (the `browse` command), starting at the profile's own folder, with a filter box for long folders. **Open WebUI** lists the signed-in person's own Open WebUI files (the `owui` command): uploads, generated images with their prompt, and files handed over from Hermes, each with the chat it belongs to, newest first, 100 per page, with a search over names, image prompts and chat titles (needs Open WebUI 0.13 or newer). The arrows button in the panel header makes the panel wide for long listings; the browser remembers the choice. It only appears for people who have a model with Hermes Commands attached, and it uses their own Open WebUI login. It borrows the first such model it finds, so if several people share one Open WebUI, set **Sidebar Files: Profile per User** so nobody browses someone else's profile.
 
 Open WebUI runs `/static/loader.js` on every page and copies it from `/app/build/static/` when the container starts. Mount the file there (read-only), then recreate the container:
 

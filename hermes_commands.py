@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.2.0
+version: 1.3.0
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -50,6 +50,7 @@ PANEL_JS = r"""// Hermes side panel: one scrollable, closable drawer on the righ
   background:#fff;color:#1f2328;box-shadow:-10px 0 28px rgba(0,0,0,.18);transform:translateX(102%);transition:transform .18s ease;
   padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
 #hermes-panel.on{transform:none}
+#hermes-panel.wide{width:min(1280px,100vw)}
 html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px rgba(0,0,0,.5)}
 #hermes-panel .hp-head{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 16px;border-bottom:1px solid rgba(128,128,128,.25)}
 #hermes-panel .hp-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 15px/1.3 system-ui,sans-serif}
@@ -57,6 +58,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
   display:grid;place-items:center}
 #hermes-panel .hp-close:hover{background:rgba(128,128,128,.15)}
 #hermes-panel .hp-close:focus-visible{outline:2px solid #4c8dff;outline-offset:1px}
+@media (max-width:640px){#hermes-panel .hp-wide{display:none}}
 #hermes-panel iframe{flex:1;min-height:0;width:100%;border:0;background:transparent}
 #hermes-panel .hp-msg{padding:18px 16px;font:14px/1.5 system-ui,sans-serif;opacity:.75}
 @media (prefers-reduced-motion:reduce){#hermes-panel,#hermes-panel-back{transition:none}}`;
@@ -75,12 +77,22 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
     panel.id = "hermes-panel";
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.innerHTML = '<div class="hp-head"><div class="hp-title"></div><button type="button" class="hp-close" aria-label="Close">' +
+    panel.innerHTML = '<div class="hp-head"><div class="hp-title"></div>' +
+      '<button type="button" class="hp-close hp-wide" aria-label="Wider panel" title="Wider panel">' +
+      '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+      '<path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></button>' +
+      '<button type="button" class="hp-close" aria-label="Close">' +
       '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
       '<path d="M6 6l12 12M18 6L6 18"/></svg></button></div><div class="hp-body" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>';
     title = panel.querySelector(".hp-title");
     body = panel.querySelector(".hp-body");
-    panel.querySelector(".hp-close").addEventListener("click", close);
+    panel.querySelector(".hp-close:not(.hp-wide)").addEventListener("click", close);
+    // Wide view for long listings; remembered per browser.
+    try { if (localStorage.getItem("hermesPanelWide") === "1") panel.classList.add("wide"); } catch (e) { /* no storage */ }
+    panel.querySelector(".hp-wide").addEventListener("click", () => {
+      const wide = panel.classList.toggle("wide");
+      try { localStorage.setItem("hermesPanelWide", wide ? "1" : "0"); } catch (e) { /* no storage */ }
+    });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && panel.classList.contains("on")) close(); });
     document.body.append(back, panel);
   }
@@ -92,7 +104,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
       lastFocus = document.activeElement;
       back.style.display = panel.style.display = "";
       requestAnimationFrame(() => { back.classList.add("on"); panel.classList.add("on"); });
-      panel.querySelector(".hp-close").focus({ preventScroll: true });
+      panel.querySelector(".hp-close:not(.hp-wide)").focus({ preventScroll: true });
     }
   }
 
@@ -122,6 +134,23 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
           e.preventDefault();
           window.dispatchEvent(new CustomEvent("hermes-panel-command", { detail: el.getAttribute("data-hermes-cmd") }));
         }));
+        // Filter box: hides rows of this listing that do not contain the typed text.
+        const filter = doc.querySelector("[data-hermes-filter]");
+        if (filter) filter.addEventListener("input", () => {
+          const q = filter.value.trim().toLowerCase();
+          doc.querySelectorAll("tr").forEach((tr) => {
+            if (!tr.querySelector("th")) tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+          });
+        });
+        // Search box: asks the server again (Enter), for listings too long to send at once.
+        const search = doc.querySelector("[data-hermes-search]");
+        if (search) search.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter") return;
+          e.preventDefault();
+          const words = search.value.trim();
+          window.dispatchEvent(new CustomEvent("hermes-panel-command",
+            { detail: search.getAttribute("data-hermes-search") + " 1" + (words ? " " + words : "") }));
+        });
       } catch (e) { /* cross-origin frame: leave it as is */ }
     });
     body.appendChild(frame);
@@ -224,6 +253,13 @@ def card(title: str, body: str) -> str:
         ".muted{color:var(--muted)}.chip{display:inline-block;padding:0 6px;border-radius:9px;background:var(--chip);"
         "border:1px solid var(--line);font-size:11px}.step{border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin:6px 0}"
         ".sub{margin-left:14px;border-left:3px solid var(--line);padding-left:8px}"
+        ".tabs{display:flex;gap:4px;margin:0 0 10px;border-bottom:1px solid var(--line)}"
+        ".tabs a{padding:5px 10px;text-decoration:none;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}"
+        ".tabs a.on{color:var(--fg);border-bottom-color:#2f6fed;font-weight:600}"
+        "input.find{width:100%;box-sizing:border-box;margin:0 0 8px;padding:6px 8px;border:1px solid var(--line);"
+        "border-radius:6px;background:var(--bg);color:var(--fg);font:inherit}"
+        "img.thumb{width:40px;height:40px;object-fit:cover;border-radius:4px;vertical-align:middle;margin-right:6px}"
+        ".nowrap{white-space:nowrap}.pager{display:flex;justify-content:space-between;margin-top:8px}"
         "</style></head><body>"
         f"<h3>{esc(title)}</h3>{body}</body></html>"
     )
@@ -325,7 +361,7 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
 
 
 # Commands the sidebar Files panel may send by itself (it navigates without a dialog).
-_PANEL_COMMANDS = ("browse", "fetch", "myfiles")
+_PANEL_COMMANDS = ("browse", "fetch", "myfiles", "owui")
 
 HELP = [
     ("usage", "Tokens, cost, calls and messages for this chat's Hermes session"),
@@ -924,6 +960,14 @@ class Action:
     def _browse_link(self, command: str, label: str) -> str:
         return f"<a href='#' data-hermes-cmd='{esc(command)}'>{label}</a>"
 
+    @staticmethod
+    def _files_tabs(active: str) -> str:
+        """The two kinds of files the Files panel shows: Hermes' own folders, and Open WebUI's files."""
+        tabs = [("browse", "Hermes"), ("owui", "Open WebUI")]
+        return "<p class='tabs'>" + "".join(
+            f"<a href='#' data-hermes-cmd='{cmd}'{' class=on' if cmd == active else ''}>{label}</a>" for cmd, label in tabs
+        ) + "</p>"
+
     async def cmd_browse(self, ctx, arg):
         """One folder of this profile's files for the side panel: folders open in place, files download."""
         home = self._home(ctx["profile"])
@@ -951,7 +995,95 @@ class Action:
             rows.append([self._browse_link(f"fetch {p}", "📄 " + esc(p.rsplit("/", 1)[-1])), esc(num(e.get("size"))),
                          esc(when(e.get("mtime")))])
         listing = table(["Name", "Bytes", "Modified"], rows) if rows else "<p class='muted'>This folder is empty.</p>"
-        return card(f"Files: {path}", "<p class='crumbs'>" + " / ".join(crumbs) + "</p>" + listing)
+        find = ("<input class='find' type='search' data-hermes-filter placeholder='Filter this folder'>"
+                if len(entries) > 10 else "")
+        return card(f"Files: {path}", self._files_tabs("browse") + find
+                    + "<p class='crumbs'>" + " / ".join(crumbs) + "</p>" + listing)
+
+    _OWUI_PAGE = 100
+
+    async def _owui_files(self, user_id: str, query: str, skip: int, limit: int) -> tuple[list[dict], Optional[int]]:
+        """This user's own Open WebUI files, newest first: one page, plus the total when there is no search.
+        A search matches the file name, an image's prompt, or the title of a chat the file is in."""
+        from sqlalchemy import func, or_, select
+        from open_webui.internal.db import get_async_db_context
+        from open_webui.models.chats import Chat, ChatFile
+        from open_webui.models.files import File
+
+        async with get_async_db_context() as db:
+            stmt = select(File.id, File.filename, File.meta, File.created_at).where(File.user_id == user_id)
+            if query:
+                like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                in_chat = (select(ChatFile.file_id).join(Chat, Chat.id == ChatFile.chat_id)
+                           .where(Chat.user_id == user_id, Chat.title.ilike(like, escape="\\")))
+                stmt = stmt.where(or_(File.filename.ilike(like, escape="\\"),
+                                      File.meta["data"]["prompt"].as_string().ilike(like, escape="\\"),
+                                      File.id.in_(in_chat)))
+                total = None
+            else:
+                total = (await db.execute(select(func.count()).select_from(File).where(File.user_id == user_id))).scalar()
+            found = (await db.execute(stmt.order_by(File.created_at.desc(), File.id.desc()).offset(skip).limit(limit + 1))).all()
+            rows = [{"id": r.id, "filename": r.filename, "meta": r.meta or {}, "created_at": r.created_at} for r in found]
+            ids = [r["id"] for r in rows]
+            chats: dict = {}
+            if ids:
+                linked = select(ChatFile.file_id, Chat.id, Chat.title).join(Chat, Chat.id == ChatFile.chat_id).where(
+                    ChatFile.file_id.in_(ids), Chat.user_id == user_id)
+                for fid, cid, title in (await db.execute(linked)).all():
+                    chats.setdefault(fid, (cid, title))
+                wanted = {str(((r["meta"].get("data") or {}) if isinstance(r["meta"].get("data"), dict) else {}).get("chat_id") or "")
+                          for r in rows if r["id"] not in chats} - {""}
+                if wanted:
+                    titles = dict((await db.execute(select(Chat.id, Chat.title).where(
+                        Chat.id.in_(wanted), Chat.user_id == user_id))).all())
+                    for r in rows:
+                        cid = str(((r["meta"].get("data") or {}) if isinstance(r["meta"].get("data"), dict) else {}).get("chat_id") or "")
+                        if r["id"] not in chats and cid in titles:
+                            chats[r["id"]] = (cid, titles[cid])
+            for r in rows:
+                r["chat"] = chats.get(r["id"])
+        return rows, total
+
+    async def cmd_owui(self, ctx, arg):
+        """This user's Open WebUI files (uploads, generated images, files from Hermes) for the Files panel."""
+        user_id = str(ctx.get("user_id") or "")
+        if not user_id:
+            raise CommandError("Open WebUI files need a signed-in user.")
+        words = arg.strip().split(" ", 1)
+        page = int(words[0]) if words[0].isdigit() and int(words[0]) > 0 else 1
+        query = (words[1] if len(words) > 1 and words[0].isdigit() else ("" if words[0].isdigit() else arg)).strip()[:200]
+        size = self._OWUI_PAGE
+        try:
+            rows, total = await self._owui_files(user_id, query, (page - 1) * size, size)
+        except ImportError:
+            raise CommandError("Listing Open WebUI files needs Open WebUI 0.13 or newer.")
+        more, rows = len(rows) > size, rows[:size]
+        out = []
+        for r in rows:
+            meta = r["meta"] if isinstance(r["meta"], dict) else {}
+            data = meta.get("data") if isinstance(meta.get("data"), dict) else {}
+            name = str(meta.get("name") or r["filename"] or r["id"])
+            ctype = str(meta.get("content_type") or "")
+            url = f"/api/v1/files/{esc(r['id'])}/content"
+            thumb = f"<img class='thumb' loading='lazy' alt='' src='{url}'>" if ctype.startswith("image/") else ""
+            prompt = str(data.get("prompt") or "")
+            kind = "Generated" if prompt else ("From Hermes" if data.get("hermes_path") else "Upload")
+            note = f"<br><span class='muted'>{esc(prompt[:120])}{'…' if len(prompt) > 120 else ''}</span>" if prompt else ""
+            chat = r.get("chat")
+            chat_cell = f"<a href='/c/{esc(chat[0])}'>{esc(chat[1] or 'Untitled chat')}</a>" if chat else "<span class='muted'>none</span>"
+            out.append([f"{thumb}<a href='{url}' title='{esc(prompt[:400])}'>{esc(name)}</a>{note}", esc(kind), chat_cell,
+                        f"<span class='nowrap'>{esc(num(meta.get('size')))}</span>",
+                        f"<span class='nowrap'>{esc(when(r['created_at']))}</span>"])
+        head = (f"<p class='muted'>{total} files, newest first.</p>" if total is not None
+                else f"<p class='muted'>Matches for <b>{esc(query)}</b> in names, image prompts and chat titles.</p>")
+        listing = table(["File", "Kind", "Chat", "Bytes", "Created"], out) if out else "<p class='muted'>No files.</p>"
+        q = f" {query}" if query else ""
+        newer = self._browse_link(f"owui {page - 1}{q}", "&#8592; Newer") if page > 1 else "<span></span>"
+        older = self._browse_link(f"owui {page + 1}{q}", "Older &#8594;") if more else "<span></span>"
+        find = (f"<input class='find' type='search' data-hermes-search='owui' value='{esc(query)}' "
+                "placeholder='Search names, prompts, chat titles (Enter)'>")
+        return card("Files: Open WebUI", self._files_tabs("owui") + find + head + listing
+                    + f"<p class='pager'>{newer}<span class='muted'>Page {page}</span>{older}</p>")
 
     async def cmd_fetch(self, ctx, arg):
         """Download one file from the panel: cached in Open WebUI, then handed to the browser."""
@@ -1125,7 +1257,7 @@ class Action:
         "help": "cmd_help", "usage": "cmd_usage", "steps": "cmd_steps", "last": "cmd_last", "resume": "cmd_last",
         "steer": "cmd_steer", "stop": "cmd_stop", "title": "cmd_title", "model": "cmd_model", "todos": "cmd_todos",
         "todo": "cmd_todos", "cron": "cmd_cron", "tasks": "cmd_cron", "skills": "cmd_skills", "skill": "cmd_skill",
-        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file", "myfiles": "cmd_myfiles", "browse": "cmd_browse", "fetch": "cmd_fetch",
+        "memory": "cmd_memory", "insights": "cmd_insights", "files": "cmd_files", "file": "cmd_file", "myfiles": "cmd_myfiles", "browse": "cmd_browse", "fetch": "cmd_fetch", "owui": "cmd_owui",
         "sessions": "cmd_sessions", "import": "cmd_import", "status": "cmd_status", "workspaces": "cmd_workspaces",
         "forget": "cmd_forget",
     }
