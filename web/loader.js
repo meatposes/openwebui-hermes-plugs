@@ -175,7 +175,7 @@ html.dark #hermes-panel{background:#0d1117;color:#e6edf3;box-shadow:-10px 0 28px
   function openFiles(e) {
     e.preventDefault();
     e.stopPropagation();
-    run("browse", "Files");
+    run("owui", "Files");
   }
 
   window.addEventListener("hermes-panel-command", (e) => {

@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.3.1
+version: 1.3.2
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -200,6 +200,19 @@ def num(value: Any) -> str:
         return f"{int(value):,}"
     except (TypeError, ValueError):
         return "0"
+
+
+def size_text(value: Any) -> str:
+    """File size for people: 512 B, 3.4 KB, 1.2 MB, 2.0 GB. '' when unknown."""
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} B" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return ""
 
 
 def text_of(content: Any) -> str:
@@ -939,9 +952,9 @@ class Action:
         if ctx["profile"] in ("", "default") and not self.valves.file_folders.strip():
             entries = [e for e in entries if not str(e.get("path", "")).startswith("/opt/data/profiles")]
         rows = [[("📁 " if e.get("is_directory") else "📄 ") + f"<code>{esc(e.get('path'))}</code>",
-                 esc("" if e.get("is_directory") else num(e.get("size"))), esc(when(e.get("mtime")))]
+                 esc("" if e.get("is_directory") else size_text(e.get("size"))), esc(when(e.get("mtime")))]
                 for e in entries]
-        return card(f"Files: {data.get('path') or path}", badge + table(["Path", "Bytes", "Modified"], rows)
+        return card(f"Files: {data.get('path') or path}", badge + table(["Path", "Size", "Modified"], rows)
                     + "<p class='muted'>Open one with: file &lt;path&gt;. List a folder with: files &lt;path&gt;</p>")
 
     def _user_profile(self, user: Optional[dict]) -> str:
@@ -963,7 +976,7 @@ class Action:
     @staticmethod
     def _files_tabs(active: str) -> str:
         """The two kinds of files the Files panel shows: Hermes' own folders, and Open WebUI's files."""
-        tabs = [("browse", "Hermes"), ("owui", "Open WebUI")]
+        tabs = [("owui", "Open WebUI"), ("browse", "Hermes")]
         return "<p class='tabs'>" + "".join(
             f"<a href='#' data-hermes-cmd='{cmd}'{' class=on' if cmd == active else ''}>{label}</a>" for cmd, label in tabs
         ) + "</p>"
@@ -992,9 +1005,9 @@ class Action:
             rows.append([self._browse_link(f"browse {p}", "📁 " + esc(p.rsplit("/", 1)[-1])), "", esc(when(e.get("mtime")))])
         for e in sorted((e for e in entries if not e.get("is_directory")), key=key):
             p = str(e.get("path"))
-            rows.append([self._browse_link(f"fetch {p}", "📄 " + esc(p.rsplit("/", 1)[-1])), esc(num(e.get("size"))),
+            rows.append([self._browse_link(f"fetch {p}", "📄 " + esc(p.rsplit("/", 1)[-1])), esc(size_text(e.get("size"))),
                          esc(when(e.get("mtime")))])
-        listing = table(["Name", "Bytes", "Modified"], rows) if rows else "<p class='muted'>This folder is empty.</p>"
+        listing = table(["Name", "Size", "Modified"], rows) if rows else "<p class='muted'>This folder is empty.</p>"
         find = ("<input class='find' type='search' data-hermes-filter placeholder='Filter this folder'>"
                 if len(entries) > 10 else "")
         return card(f"Files: {path}", self._files_tabs("browse") + find
@@ -1132,11 +1145,11 @@ class Action:
             chat = r.get("chat")
             chat_cell = f"<a href='/c/{esc(chat[0])}'>{esc(chat[1] or 'Untitled chat')}</a>" if chat else "<span class='muted'>none</span>"
             out.append([f"{thumb}<a href='{url}' title='{esc(prompt[:400])}'>{esc(name)}</a>{note}", esc(kind), chat_cell,
-                        f"<span class='nowrap'>{esc(num(meta.get('size')))}</span>",
+                        f"<span class='nowrap'>{esc(size_text(meta.get('size')))}</span>",
                         f"<span class='nowrap'>{esc(when(r['created_at']))}</span>"])
         head = (f"<p class='muted'>{total} files, newest first.</p>" if total is not None
                 else f"<p class='muted'>Matches for <b>{esc(query)}</b> in names, image prompts and chat titles.</p>")
-        listing = table(["File", "Kind", "Chat", "Bytes", "Created"], out) if out else "<p class='muted'>No files.</p>"
+        listing = table(["File", "Kind", "Chat", "Size", "Created"], out) if out else "<p class='muted'>No files.</p>"
         q = f" {query}" if query else ""
         newer = self._browse_link(f"owui {page - 1}{q}", "&#8592; Newer") if page > 1 else "<span></span>"
         older = self._browse_link(f"owui {page + 1}{q}", "Older &#8594;") if more else "<span></span>"
@@ -1155,7 +1168,7 @@ class Action:
             raise CommandError(f"There is no file {path}.")
         size = int(entry.get("size") or 0)
         if size > self.valves.myfiles_max_mb * 1024 * 1024:
-            raise CommandError(f"{name} is {num(size)} bytes, over the My Files size limit; open it with: file {path}")
+            raise CommandError(f"{name} is {size_text(size)}, over the My Files size limit; open it with: file {path}")
         file_id = await self._cached_file(ctx, path, size, entry.get("mtime"))
         url = f"/api/v1/files/{file_id}/content?attachment=true"
         return card(f"Download: {name}", f"<p><a href='{url}' data-hermes-download='{url}'>{esc(name)}</a></p>")
@@ -1183,9 +1196,9 @@ class Action:
                 link = f"<a href='/api/v1/files/{file_id}/content?attachment=true'>{name}</a>"
             else:
                 link = f"{name} <span class='muted'>(too big here: file {esc(path)})</span>"
-            rows.append([link, esc(where), esc(num(size)), esc(when(e.get("mtime")))])
+            rows.append([link, esc(where), esc(size_text(size)), esc(when(e.get("mtime")))])
         extra = "".join(f"<p class='muted'>Folder: files {esc(f.get('path'))}</p>" for f in folders)
-        body = table(["File", "From", "Bytes", "Modified"], rows) if rows else "<p class='muted'>No files yet.</p>"
+        body = table(["File", "From", "Size", "Modified"], rows) if rows else "<p class='muted'>No files yet.</p>"
         return card("My files", body + extra)
 
     async def _cached_file(self, ctx, path: str, size: int, mtime) -> str:
@@ -1232,7 +1245,7 @@ class Action:
             file_id = await self._store_file(ctx, path, data, content_type or guessed)
             name = esc(path.rsplit("/", 1)[-1])
             return card(name, f"<p><a href='/api/v1/files/{file_id}/content' target='_blank'>Download {name}</a> "
-                        f"<span class='muted'>({num(len(data))} bytes)</span></p>")
+                        f"<span class='muted'>({size_text(len(data))})</span></p>")
         text = await self._read_text(ctx, path)
         return card(path, f"<pre>{esc(text[:_TEXT_LIMIT])}</pre>"
                     + ("<p class='muted'>Truncated.</p>" if len(text) > _TEXT_LIMIT else ""))

@@ -12,7 +12,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from hermes_commands import PANEL_JS, Action, CommandError, card, derive_session_id, parse_tool_calls, table, to_markdown, when  # noqa: E402
+from hermes_commands import PANEL_JS, Action, CommandError, card, derive_session_id, parse_tool_calls, size_text, table, to_markdown, when  # noqa: E402
 
 
 class Helpers(unittest.TestCase):
@@ -21,6 +21,13 @@ class Helpers(unittest.TestCase):
         self.assertEqual(derive_session_id("work", "", "hello there"), expected)
         default = "api-" + hashlib.sha256("sys\nhello there".encode()).hexdigest()[:16]
         self.assertEqual(derive_session_id("default", "sys", "hello there"), default)
+
+    def test_size_text(self):
+        self.assertEqual(size_text(512), "512 B")
+        self.assertEqual(size_text(3482), "3.4 KB")
+        self.assertEqual(size_text(3.5 * 1024 * 1024), "3.5 MB")
+        self.assertEqual(size_text(5 * 1024 ** 4), "5120.0 GB")
+        self.assertEqual(size_text(None), "")
 
     def test_tool_calls_json_and_python_repr(self):
         call = {"id": "c1", "function": {"name": "terminal", "arguments": '{"command": "ls"}'}}
@@ -237,6 +244,8 @@ class OpenWebUIFiles(unittest.IsolatedAsyncioTestCase):
         self.assertIn("data-hermes-cmd='owui 2'", out)
         self.assertNotIn("notes.pdf' class", out)
         self.assertIn("class=on>Open WebUI", out)
+        self.assertIn("2.0 KB", out)
+        self.assertLess(out.index(">Open WebUI<"), out.index(">Hermes<"))
 
     async def test_second_page_and_search(self):
         out = await self.action.cmd_owui({"user_id": "u1"}, "2")
