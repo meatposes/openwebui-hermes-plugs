@@ -217,7 +217,11 @@ class OpenWebUIFiles(unittest.IsolatedAsyncioTestCase):
             self.asked.append((user_id, query, skip, limit))
             return files[skip:skip + limit + 1], (None if query else len(files))
 
+        async def thumbs(rows):
+            return {r["id"]: "data:image/webp;base64,AAAA" for r in rows if r["meta"]["content_type"].startswith("image/")}
+
         self.action._owui_files = owui_files
+        self.action._thumbs = thumbs
         self.action._OWUI_PAGE = 2
 
     async def test_lists_only_the_signed_in_users_files_with_kind_chat_and_prompt(self):
@@ -228,7 +232,8 @@ class OpenWebUIFiles(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Upload", out)
         self.assertIn("a red &lt;b&gt;fox&lt;/b&gt; in snow", out)
         self.assertIn("<a href='/c/c9'>Fox pictures</a>", out)
-        self.assertIn("<img class='thumb' loading='lazy' alt='' src='/api/v1/files/f1/content'>", out)
+        self.assertIn("<a href='/api/v1/files/f1/content'><img class='thumb' alt='' src='data:image/webp;base64,AAAA'></a>", out)
+        self.assertEqual(out.count("class='thumb'"), 1)
         self.assertIn("data-hermes-cmd='owui 2'", out)
         self.assertNotIn("notes.pdf' class", out)
         self.assertIn("class=on>Open WebUI", out)
@@ -245,6 +250,27 @@ class OpenWebUIFiles(unittest.IsolatedAsyncioTestCase):
         self.assertIn("data-hermes-cmd='owui 2 red fox'", out)
         await self.action.cmd_owui({"user_id": "u1"}, "fox")
         self.assertEqual(self.asked[-1], ("u1", "fox", 0, 2))
+
+    def test_thumbnail_is_small_and_cached(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow not installed")
+        import base64
+        import io
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "big.png")
+            Image.new("RGB", (1600, 900), "red").save(src)
+            url = Action()._thumb("f-1", src)
+            self.assertTrue(url.startswith("data:image/webp;base64,"))
+            with Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))) as im:
+                self.assertLessEqual(max(im.size), 96)
+            self.assertEqual(Action()._thumb("f-2", os.path.join(tmp, "missing.png")), "")
+            with open(os.path.join(tmp, "not.png"), "w") as fh:
+                fh.write("text")
+            self.assertEqual(Action()._thumb("f-3", os.path.join(tmp, "not.png")), "")
 
     async def test_refuses_without_a_user(self):
         with self.assertRaises(CommandError):

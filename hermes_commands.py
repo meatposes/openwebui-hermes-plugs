@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.3.0
+version: 1.3.1
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -1011,7 +1011,7 @@ class Action:
         from open_webui.models.files import File
 
         async with get_async_db_context() as db:
-            stmt = select(File.id, File.filename, File.meta, File.created_at).where(File.user_id == user_id)
+            stmt = select(File.id, File.filename, File.meta, File.created_at, File.path).where(File.user_id == user_id)
             if query:
                 like = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
                 in_chat = (select(ChatFile.file_id).join(Chat, Chat.id == ChatFile.chat_id)
@@ -1023,7 +1023,8 @@ class Action:
             else:
                 total = (await db.execute(select(func.count()).select_from(File).where(File.user_id == user_id))).scalar()
             found = (await db.execute(stmt.order_by(File.created_at.desc(), File.id.desc()).offset(skip).limit(limit + 1))).all()
-            rows = [{"id": r.id, "filename": r.filename, "meta": r.meta or {}, "created_at": r.created_at} for r in found]
+            rows = [{"id": r.id, "filename": r.filename, "meta": r.meta or {}, "created_at": r.created_at, "path": r.path}
+                    for r in found]
             ids = [r["id"] for r in rows]
             chats: dict = {}
             if ids:
@@ -1044,6 +1045,64 @@ class Action:
                 r["chat"] = chats.get(r["id"])
         return rows, total
 
+    _THUMB_PX = 96
+
+    def _thumb(self, file_id: str, path: Optional[str]) -> str:
+        """A small WebP preview of an image file as a data: URL, made once and kept in Open WebUI's cache
+        folder (files never change after upload). '' when the file is not local or not an image."""
+        import base64
+        import io
+        import os
+
+        safe = re.sub(r"[^A-Za-z0-9-]", "", str(file_id))
+        try:
+            from open_webui.config import CACHE_DIR
+
+            cached = os.path.join(str(CACHE_DIR), "hermes-thumbs", safe + ".webp") if safe else ""
+        except Exception:
+            cached = ""
+        try:
+            if cached and os.path.isfile(cached):
+                with open(cached, "rb") as fh:
+                    data = fh.read()
+            else:
+                if not path or not os.path.isfile(path):
+                    return ""
+                from PIL import Image
+
+                with Image.open(path) as im:
+                    im.draft("RGB", (self._THUMB_PX * 2, self._THUMB_PX * 2))
+                    im.thumbnail((self._THUMB_PX, self._THUMB_PX))
+                    small = im.convert("RGBA" if "A" in im.getbands() or im.mode == "P" else "RGB")
+                buf = io.BytesIO()
+                small.save(buf, "WEBP", quality=70)
+                data = buf.getvalue()
+                if cached:
+                    try:
+                        os.makedirs(os.path.dirname(cached), exist_ok=True)
+                        tmp = f"{cached}.{os.getpid()}.tmp"
+                        with open(tmp, "wb") as fh:
+                            fh.write(data)
+                        os.replace(tmp, cached)
+                    except OSError as exc:  # no cache, still a preview
+                        log.debug("Hermes Commands: preview cache not written: %s", exc)
+        except Exception as exc:  # unreadable or not really an image: no preview
+            log.debug("Hermes Commands: no preview for %s: %s", safe, exc)
+            return ""
+        return "data:image/webp;base64," + base64.b64encode(data).decode()
+
+    async def _thumbs(self, rows: list[dict]) -> dict:
+        """Previews for the image rows of one page, four at a time, off the event loop."""
+        gate = asyncio.Semaphore(4)
+
+        async def one(r):
+            async with gate:
+                return r["id"], await asyncio.to_thread(self._thumb, r["id"], r.get("path"))
+
+        meta = lambda r: r["meta"] if isinstance(r["meta"], dict) else {}  # noqa: E731
+        todo = [r for r in rows if str(meta(r).get("content_type") or "").startswith("image/")]
+        return dict(await asyncio.gather(*(one(r) for r in todo)))
+
     async def cmd_owui(self, ctx, arg):
         """This user's Open WebUI files (uploads, generated images, files from Hermes) for the Files panel."""
         user_id = str(ctx.get("user_id") or "")
@@ -1058,6 +1117,7 @@ class Action:
         except ImportError:
             raise CommandError("Listing Open WebUI files needs Open WebUI 0.13 or newer.")
         more, rows = len(rows) > size, rows[:size]
+        thumbs = await self._thumbs(rows)
         out = []
         for r in rows:
             meta = r["meta"] if isinstance(r["meta"], dict) else {}
@@ -1065,7 +1125,7 @@ class Action:
             name = str(meta.get("name") or r["filename"] or r["id"])
             ctype = str(meta.get("content_type") or "")
             url = f"/api/v1/files/{esc(r['id'])}/content"
-            thumb = f"<img class='thumb' loading='lazy' alt='' src='{url}'>" if ctype.startswith("image/") else ""
+            thumb = f"<a href='{url}'><img class='thumb' alt='' src='{thumbs[r['id']]}'></a>" if thumbs.get(r["id"]) else ""
             prompt = str(data.get("prompt") or "")
             kind = "Generated" if prompt else ("From Hermes" if data.get("hermes_path") else "Upload")
             note = f"<br><span class='muted'>{esc(prompt[:120])}{'…' if len(prompt) > 120 else ''}</span>" if prompt else ""
