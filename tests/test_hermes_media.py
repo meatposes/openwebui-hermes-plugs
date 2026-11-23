@@ -341,6 +341,25 @@ class OutletFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out["messages"][-1]["content"], "again")
         os.unlink(fh.name)
 
+    async def test_native_install_data_folder(self):
+        self.filter.valves.hermes_data_folder = "/home/me/.hermes"
+        self.filter.valves.allowed_path_prefixes = "/home/me/.hermes/"
+        self.dash.files["/home/me/.hermes/profiles/kid/outputs/cat.png"] = ("image/png", b"\x89PNG kid")
+        self.dash.files["/home/me/.hermes/profiles/work/plan.png"] = ("image/png", b"\x89PNG work")
+        text = "MEDIA:/home/me/.hermes/profiles/kid/outputs/cat.png\nMEDIA:/home/me/.hermes/profiles/work/plan.png"
+        content = (await self.run_outlet(text, connection=1))["messages"][-1]["content"]  # the kid profile
+        self.assertIn("![cat.png]", content)
+        self.assertIn("MEDIA:/home/me/.hermes/profiles/work/plan.png", content)
+        self.assertNotIn("/home/me/.hermes/profiles/work/plan.png", self.dash.requested)
+        with tempfile.NamedTemporaryFile(delete=False) as fh:
+            fh.write(b"PK deck")
+        self.store.files["up-2"] = types.SimpleNamespace(id="up-2", filename="deck.pptx", path=fh.name, meta={})
+        body = {"messages": [{"role": "user", "content": "update the deck"}], "files": [{"type": "file", "id": "up-2"}]}
+        out = await self.filter.inlet(body, __model__={"urlIdx": 1}, __metadata__={}, __id__="hermes_media")
+        self.assertEqual(self.received, {"/home/me/.hermes/profiles/kid/uploads/deck.pptx": b"PK deck"})
+        self.assertIn("save it in /home/me/.hermes/profiles/kid/outputs/", out["messages"][-1]["content"])
+        os.unlink(fh.name)
+
     async def test_inlet_restores_paths(self):
         await self.run_outlet("MEDIA:/opt/data/fox.png and MEDIA:/opt/data/music/song.mp3")
         rewritten = self.body("")

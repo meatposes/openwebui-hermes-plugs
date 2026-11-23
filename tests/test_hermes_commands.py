@@ -80,6 +80,20 @@ class PathGuard(unittest.TestCase):
         with self.assertRaises(CommandError):
             self.action._check_path(ctx, "/opt/data/profiles/work/memories/MEMORY.md")
 
+    def test_native_install_data_folder(self):
+        self.action.valves.hermes_data_folder = "/home/me/.hermes/"
+        ctx = {"profile": "work"}
+        self.assertEqual(self.action._home("work"), "/home/me/.hermes/profiles/work")
+        self.assertEqual(self.action._check_path(ctx, "/home/me/.hermes/profiles/work/memories/MEMORY.md"),
+                         "/home/me/.hermes/profiles/work/memories/MEMORY.md")
+        for bad in ("/opt/data/profiles/work/memories/MEMORY.md", "/home/me/.hermes/profiles/other/x"):
+            with self.assertRaises(CommandError):
+                self.action._check_path(ctx, bad)
+        with self.assertRaises(CommandError):
+            self.action._check_path({"profile": "default"}, "/home/me/.hermes/profiles/work/a.txt")
+        self.assertEqual(self.action._check_path({"profile": "default"}, "/home/me/.hermes/notes/a.txt"),
+                         "/home/me/.hermes/notes/a.txt")
+
     def test_folders_setting_widens_access(self):
         self.action.valves.file_folders = "/srv/shared"
         self.assertEqual(self.action._check_path({"profile": "work"}, "/srv/shared/a.txt"), "/srv/shared/a.txt")

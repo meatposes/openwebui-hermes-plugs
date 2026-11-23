@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.3.2
+version: 1.3.3
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -445,6 +445,13 @@ class Action:
             title="My Files: Max File Size (MB)",
             description="Larger files are listed without a download link.",
         )
+        hermes_data_folder: str = Field(
+            default="/opt/data",
+            title="Hermes Data Folder",
+            description="Where Hermes keeps its data (HERMES_HOME) on the Hermes host: /opt/data in the Docker "
+            "image, usually ~/.hermes (written out, e.g. /home/me/.hermes) for a native install. Profiles live "
+            "in <this>/profiles/<name>.",
+        )
         profile: str = Field(
             default="",
             title="Hermes Profile (optional)",
@@ -839,8 +846,12 @@ class Action:
         content = data.get("content") if isinstance(data, dict) else data
         return card(f"Skill: {arg.strip()}", f"<pre>{esc(str(content)[:_TEXT_LIMIT])}</pre>")
 
+    def _data_root(self) -> str:
+        return self.valves.hermes_data_folder.strip().rstrip("/") or "/opt/data"
+
     def _home(self, profile: str) -> str:
-        return "/opt/data" if profile in ("", "default") else f"/opt/data/profiles/{profile}"
+        root = self._data_root()
+        return root if profile in ("", "default") else f"{root}/profiles/{profile}"
 
     def _check_path(self, ctx, path: str) -> str:
         """Keep file browsing inside this profile: its own folder by default, never other profiles'."""
@@ -853,7 +864,8 @@ class Action:
         home = self._home(ctx["profile"])
         if not roots:
             roots = [home]
-            if ctx["profile"] in ("", "default") and (path == "/opt/data/profiles" or path.startswith("/opt/data/profiles/")):
+            profiles = self._data_root() + "/profiles"
+            if ctx["profile"] in ("", "default") and (path == profiles or path.startswith(profiles + "/")):
                 raise CommandError("That folder belongs to other Hermes profiles.")
         if not any(path == r or path.startswith(r + "/") for r in roots):
             raise CommandError(f"Only these folders can be browsed: {', '.join(roots)}")
@@ -950,7 +962,7 @@ class Action:
             pass
         entries = data.get("entries") or []
         if ctx["profile"] in ("", "default") and not self.valves.file_folders.strip():
-            entries = [e for e in entries if not str(e.get("path", "")).startswith("/opt/data/profiles")]
+            entries = [e for e in entries if not str(e.get("path", "")).startswith(self._data_root() + "/profiles")]
         rows = [[("📁 " if e.get("is_directory") else "📄 ") + f"<code>{esc(e.get('path'))}</code>",
                  esc("" if e.get("is_directory") else size_text(e.get("size"))), esc(when(e.get("mtime")))]
                 for e in entries]
@@ -989,7 +1001,7 @@ class Action:
         path = str(data.get("path") or path).rstrip("/") or "/"
         entries = [e for e in data.get("entries") or [] if not str(e.get("path", "")).rsplit("/", 1)[-1].startswith(".")]
         if ctx["profile"] in ("", "default") and not self.valves.file_folders.strip():
-            entries = [e for e in entries if not str(e.get("path", "")).startswith("/opt/data/profiles")]
+            entries = [e for e in entries if not str(e.get("path", "")).startswith(self._data_root() + "/profiles")]
         roots = [r.strip().rstrip("/") for r in self.valves.file_folders.split(",") if r.strip()] or [home]
         root = next((r for r in roots if path == r or path.startswith(r + "/")), home)
         crumbs, walked = [self._browse_link(f"browse {root}", esc(root))], root
