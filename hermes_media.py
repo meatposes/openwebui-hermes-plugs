@@ -1,6 +1,6 @@
 """
 title: Hermes Media
-version: 1.1.1
+version: 1.1.2
 description: Shows images, audio, video and files from Hermes Agent MEDIA: tags in chat, and passes your attachments to Hermes.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -138,6 +138,13 @@ class Filter:
             title="Allowed Folders",
             description="Comma-separated folders the filter may fetch from. Tags outside them stay as text.",
         )
+        hermes_data_folder: str = Field(
+            default="/opt/data",
+            title="Hermes Data Folder",
+            description="Where Hermes keeps its data (HERMES_HOME) on the Hermes host: /opt/data in the Docker "
+            "image, usually ~/.hermes (written out, e.g. /home/me/.hermes) for a native install. Profiles live "
+            "in <this>/profiles/<name>.",
+        )
         limit_to_profile: bool = Field(
             default=True,
             title="Only This Profile's Files",
@@ -199,6 +206,9 @@ class Filter:
         self._uploaded: set[tuple[str, str]] = set()  # (Open WebUI file id, Hermes path) already sent
 
     # ---- media types -------------------------------------------------------------------------
+
+    def _data_root(self) -> str:
+        return self.valves.hermes_data_folder.strip().rstrip("/") or "/opt/data"
 
     def _kinds(self) -> dict[str, str]:
         kinds = {}
@@ -409,7 +419,7 @@ class Filter:
         profile = await self._profile(model)
         if profile is None:
             return []
-        folder = f"{profile_folder(profile)}/{self.valves.uploads_folder.strip().strip('/') or 'uploads'}"
+        folder = f"{profile_folder(profile, self._data_root())}/{self.valves.uploads_folder.strip().strip('/') or 'uploads'}"
         saved = []
         for item in files:
             if not isinstance(item, dict) or item.get("type") not in (None, "file"):
@@ -458,11 +468,11 @@ class Filter:
             ext = os.path.splitext(name)[1].lower().lstrip(".")
             allowed = url_allowed(path, url_prefixes) if is_url else path_allowed(path, prefixes)
             if allowed and not is_url and self.valves.limit_to_profile:
-                allowed = profile is not None and profile_allows(path, profile)
+                allowed = profile is not None and profile_allows(path, profile, self._data_root())
             kind = kinds.get(ext)
             user_folders = ("outputs", self.valves.uploads_folder.strip().strip("/"))
             if kind is None and ext in split_list(self.valves.output_text_extensions) \
-                    and in_user_folders(path, profile, user_folders):
+                    and in_user_folders(path, profile, user_folders, self._data_root()):
                 kind = "file"
             if kind is None or not allowed:
                 results[path] = None  # never fetched, left as written
@@ -489,7 +499,7 @@ class Filter:
                 async with session.get(f"{self._base_url()}/api/chat/workspaces",
                                        headers={"Authorization": f"Bearer {token}"}) as resp:
                     data = await resp.json() if resp.status == 200 else {}
-            self._workspace_cache = str(data.get("default_cwd") or "/opt/data").rstrip("/")
+            self._workspace_cache = str(data.get("default_cwd") or self._data_root()).rstrip("/")
         return self._workspace_cache
 
     async def _uri_paths(self, texts: list[str], function_id: Optional[str]) -> dict[str, str]:
@@ -590,7 +600,7 @@ class Filter:
                 saved = await self._send_uploads(body, __model__, __metadata__ or {}, __id__)
                 users = [m for m in body.get("messages") or [] if m.get("role") == "user"]
                 if saved and users:
-                    outputs = f"{profile_folder(await self._profile(__model__) or 'default')}/outputs"
+                    outputs = f"{profile_folder(await self._profile(__model__) or 'default', self._data_root())}/outputs"
                     note = ("\n\n[The user attached these files. The originals are saved in your folder; open them "
                             "from there to read or change them: " + ", ".join(saved) + ". To give the user a file, "
                             f"save it in {outputs}/ and put a MEDIA:<path> line for it in your reply; that line "

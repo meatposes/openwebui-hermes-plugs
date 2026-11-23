@@ -187,6 +187,7 @@ redirects are refused.
 | Dashboard URL | (empty) | Where the Hermes dashboard is. Change this if Hermes moves. |
 | Refresh Token | (empty) | Dashboard sign-in. The filter renews it on its own. |
 | Allowed Folders | `/opt/data/` | Only files under these folders are fetched. Comma-separated. |
+| Hermes Data Folder | `/opt/data` | Where Hermes keeps its data (`HERMES_HOME`) on the Hermes host. `/opt/data` is the Docker image; a native install usually uses `~/.hermes`, written out (e.g. `/home/me/.hermes`). Set **Allowed Folders** to match. |
 | Only This Profile's Files | On | A model wired to `/p/<profile>/v1` only gets files from that profile's folder (`/opt/data/profiles/<profile>/`); the default profile never gets other profiles' files. Turn off only if every profile belongs to the same person. |
 | Send Attachments To Hermes | On | Copies files the user attaches into the profile's folder and tells Hermes where they are, so it can open and edit the originals. Open WebUI still adds the extracted text as before. Needs the dashboard settings above. |
 | Attachments Folder | `uploads` | Folder inside the profile's folder that attachments are copied to. |
@@ -228,7 +229,7 @@ When a file can't be shown, the `MEDIA:` line stays in the reply with a short no
 
 ### Moving Hermes to another server
 
-Change **Dashboard URL**. Run step 2 again only if the signing secret changed. If the new install stores data somewhere other than `/opt/data`, update **Allowed Folders**.
+Change **Dashboard URL**. Run step 2 again only if the signing secret changed. If the new install stores data somewhere other than `/opt/data`, update **Hermes Data Folder** and **Allowed Folders**.
 
 ---
 
@@ -354,6 +355,7 @@ All optional.
 | Dashboard URL, Dashboard Refresh Token | (empty) | Empty uses Hermes Media's. |
 | Hermes Profile | (empty) | Empty reads it from the connection URL (`/p/<profile>/v1`), else `default`. |
 | Browsable Folders | (empty) | Folders `files`, `file` and `memory` may read. Empty = this profile's own folder only; other profiles' folders are always hidden unless listed here. |
+| Hermes Data Folder | `/opt/data` | Where Hermes keeps its data (`HERMES_HOME`): `/opt/data` in Docker, usually `/home/<user>/.hermes` for a native install. A profile's own folder is `<this>/profiles/<name>`. |
 | Show Results In | `panel` | `panel`: a side panel that opens at once, scrolls, and closes with X, Esc or a click outside. `chip`: a source chip under the reply. `inline`: a card at the top of the reply. |
 | My Files: Max File Size (MB) | 200 | Larger files are listed without a download link, and `browse` will not download them. |
 | Sidebar Files: Profile per User | (empty) | `user=profile` pairs, comma-separated (for example `alice=default, bob=work`), matched by Open WebUI username, email or name. The sidebar Files entry then shows each person their own Hermes profile's files, whichever Hermes model it borrows. Empty = the profile of that model's connection. |
