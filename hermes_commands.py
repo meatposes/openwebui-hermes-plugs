@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.3.2
+version: 1.3.3
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -408,6 +408,25 @@ HELP = [
 ]
 
 
+def connection_index(model: Optional[dict], request=None) -> Optional[int]:
+    """Index of the model's Open WebUI connection. A Workspace model (built on a base model, for example to
+    give it an avatar, a prompt or group access) has no urlIdx of its own: Open WebUI routes it through its
+    base model's connection, so look that one up."""
+    model = model or {}
+    if model.get("urlIdx") is not None:
+        return model["urlIdx"]
+    base_id = str((model.get("info") or {}).get("base_model_id") or "")
+    state = getattr(getattr(request, "app", None), "state", None)
+    if not base_id or state is None:
+        return None
+    for table in ("OPENAI_MODELS", "MODELS"):
+        models = getattr(state, table, None) or {}
+        base = models.get(base_id) or models.get(base_id.split(":")[0]) or {}
+        if base.get("urlIdx") is not None:
+            return base["urlIdx"]
+    return None
+
+
 class Action:
     class Valves(BaseModel):
         hermes_api_url: str = Field(
@@ -477,12 +496,12 @@ class Action:
 
     # ---- connections -----------------------------------------------------------------------------
 
-    async def _api(self, model: Optional[dict]) -> tuple[str, str, str]:
+    async def _api(self, model: Optional[dict], request=None) -> tuple[str, str, str]:
         """(API root without /v1, key, profile)."""
         if self.valves.hermes_api_url.strip():
             url, key = self.valves.hermes_api_url.strip(), self.valves.hermes_api_key.strip()
         else:
-            idx = (model or {}).get("urlIdx")
+            idx = connection_index(model, request)
             if idx is None:
                 raise CommandError("This model has no Open WebUI connection; set Hermes API URL and Key.")
             from open_webui.routers.openai import get_openai_connection
@@ -1368,7 +1387,7 @@ class Action:
             await __event_emitter__({"type": "execute", "data": {
                 "code": PANEL_JS + f"window.hermesPanel.loading({json.dumps(label)});"}})
         try:
-            root, key, profile = await self._api(__model__)
+            root, key, profile = await self._api(__model__, __request__)
             if body.get("hermes_panel_data"):
                 profile = self._user_profile(__user__) or profile
             session_cache: dict = {}
