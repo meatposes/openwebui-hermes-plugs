@@ -1,6 +1,6 @@
 """
 title: Hermes Commands
-version: 1.3.2
+version: 1.3.3
 description: Hermes Agent commands and panels on any reply: usage, steps (tool and subagent cards), steer, stop, title, model, cron tasks, skills, memory, todos, insights, files, sessions, status.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -373,6 +373,27 @@ def table(headers: list[str], rows: list[list[str]]) -> str:
     return f"<table><tr>{head}</tr>{body}</table>"
 
 
+# Commands that change Hermes for everyone using the profile (scheduled tasks, skills, memory, model,
+# deleting the session). With "Changes Only For Admins" on, other users get only the rest.
+_CHANGE_SUBCOMMANDS = {
+    "cron": {"add", "edit", "pause", "resume", "run", "delete"},
+    "tasks": {"add", "edit", "pause", "resume", "run", "delete"},
+    "skill": {"enable", "disable"},
+    "memory": {"add"},
+}
+
+
+def changes_hermes(line: str) -> bool:
+    """True when a command line changes the profile rather than reading it."""
+    name, _, arg = line.strip().lstrip("/").partition(" ")
+    name, words = name.lower(), arg.split()
+    if name == "forget":
+        return True
+    if name == "model":
+        return bool(words)  # 'model' lists, 'model <name>' switches
+    return bool(words) and words[0].lower() in _CHANGE_SUBCOMMANDS.get(name, set())
+
+
 # Commands the sidebar Files panel may send by itself (it navigates without a dialog).
 _PANEL_COMMANDS = ("browse", "fetch", "myfiles", "owui")
 
@@ -449,6 +470,14 @@ class Action:
             default="",
             title="Hermes Profile (optional)",
             description="Empty = read it from the connection URL (/p/<profile>/v1), else 'default'.",
+        )
+        changes_for_admins_only: bool = Field(
+            default=False,
+            title="Changes Only For Admins",
+            description="On: only Open WebUI admins can run commands that change the profile (cron add/edit/"
+            "pause/resume/run/delete, skill enable/disable, memory add, model <name>, forget). Everyone else can "
+            "still read: usage, steps, todos, cron list, skills, memory, files, sessions, status. Use it when "
+            "several people share one Hermes profile.",
         )
         show_in: str = Field(
             default="panel",
@@ -1341,6 +1370,9 @@ class Action:
         handler = self.COMMANDS.get(name.lower())
         if not handler:
             raise CommandError(f"Unknown command '{name}'. Type help for the list.")
+        if self.valves.changes_for_admins_only and ctx.get("role") != "admin" and changes_hermes(line):
+            raise CommandError("Only an admin can run this command here; it changes Hermes for everyone using "
+                               "this profile.")
         return await getattr(self, handler)(ctx, arg)
 
     # ---- Open WebUI hook -------------------------------------------------------------------------
@@ -1381,6 +1413,7 @@ class Action:
             ctx = {"root": root, "key": key, "profile": profile, "session": session, "request": __request__,
                    "call": __event_call__,
                    "chat_id": body.get("chat_id") or "", "user_id": (__user__ or {}).get("id", ""),
+                   "role": (__user__ or {}).get("role", ""),
                    "model_id": body.get("model") or (__model__ or {}).get("id", "")}
             html_card = await self.run_command(line, ctx)
         except CommandError as exc:

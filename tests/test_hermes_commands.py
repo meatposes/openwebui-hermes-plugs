@@ -12,7 +12,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from hermes_commands import PANEL_JS, Action, CommandError, card, derive_session_id, parse_tool_calls, size_text, table, to_markdown, when  # noqa: E402
+from hermes_commands import PANEL_JS, Action, CommandError, card, changes_hermes, derive_session_id, parse_tool_calls, size_text, table, to_markdown, when  # noqa: E402
 
 
 class Helpers(unittest.TestCase):
@@ -59,6 +59,38 @@ class Helpers(unittest.TestCase):
         self.assertIn("[this](/x)", md)
         self.assertIn("**1. ls**", md)
         self.assertIn("```\nout\n```", md)
+
+
+class AdminOnlyChanges(unittest.IsolatedAsyncioTestCase):
+    def test_which_commands_change_hermes(self):
+        changes = ["cron add every 1d | hi", "cron delete abc", "cron edit abc name x", "cron pause abc",
+                   "tasks run abc", "skill disable foo", "skill enable foo", "memory add note", "model gpt",
+                   "forget", "/cron add every 1d | hi", "CRON DELETE abc"]
+        reads = ["cron", "cron list", "cron runs abc", "skills", "skill foo", "memory", "model", "usage", "steps all",
+                 "todos", "files /opt/data", "browse", "myfiles", "sessions", "status", "steer go on", "stop",
+                 "title My chat", "help"]
+        for line in changes:
+            self.assertTrue(changes_hermes(line), line)
+        for line in reads:
+            self.assertFalse(changes_hermes(line), line)
+
+    async def test_non_admin_is_refused_only_when_the_setting_is_on(self):
+        action = Action()
+        ran = []
+
+        async def fake(ctx, arg):
+            ran.append(arg)
+            return "ok"
+
+        action.cmd_cron = action.cmd_usage = fake
+        self.assertEqual(await action.run_command("cron delete abc", {"role": "user"}), "ok")
+        action.valves.changes_for_admins_only = True
+        with self.assertRaises(CommandError):
+            await action.run_command("cron delete abc", {"role": "user"})
+        self.assertEqual(await action.run_command("cron", {"role": "user"}), "ok")
+        self.assertEqual(await action.run_command("usage", {"role": "user"}), "ok")
+        self.assertEqual(await action.run_command("cron delete abc", {"role": "admin"}), "ok")
+        self.assertEqual(ran, ["delete abc", "", "", "delete abc"])
 
 
 class PathGuard(unittest.TestCase):

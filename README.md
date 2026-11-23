@@ -354,6 +354,7 @@ All optional.
 | Dashboard URL, Dashboard Refresh Token | (empty) | Empty uses Hermes Media's. |
 | Hermes Profile | (empty) | Empty reads it from the connection URL (`/p/<profile>/v1`), else `default`. |
 | Browsable Folders | (empty) | Folders `files`, `file` and `memory` may read. Empty = this profile's own folder only; other profiles' folders are always hidden unless listed here. |
+| Changes Only For Admins | Off | On: only Open WebUI admins can run commands that change the profile (`cron add/edit/pause/resume/run/delete`, `skill enable/disable`, `memory add`, `model <name>`, `forget`); everyone else keeps the read-only ones. For a profile several people share. |
 | Show Results In | `panel` | `panel`: a side panel that opens at once, scrolls, and closes with X, Esc or a click outside. `chip`: a source chip under the reply. `inline`: a card at the top of the reply. |
 | My Files: Max File Size (MB) | 200 | Larger files are listed without a download link, and `browse` will not download them. |
 | Sidebar Files: Profile per User | (empty) | `user=profile` pairs, comma-separated (for example `alice=default, bob=work`), matched by Open WebUI username, email or name. The sidebar Files entry then shows each person their own Hermes profile's files, whichever Hermes model it borrows. Empty = the profile of that model's connection. |
