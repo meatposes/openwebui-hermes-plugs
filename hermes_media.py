@@ -1,6 +1,6 @@
 """
 title: Hermes Media
-version: 1.1.1
+version: 1.1.2
 description: Shows images, audio, video and files from Hermes Agent MEDIA: tags in chat, and passes your attachments to Hermes.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -119,6 +119,25 @@ def derived_file_id(chat_id: str, message_id: str, path: str) -> str:
 
 def markdown_label(name: str) -> str:
     return name.replace("[", "(").replace("]", ")")
+
+
+def connection_index(model: Optional[dict], request=None) -> Optional[int]:
+    """Index of the model's Open WebUI connection. A Workspace model (built on a base model, for example to
+    give it an avatar, a prompt or group access) has no urlIdx of its own: Open WebUI routes it through its
+    base model's connection, so look that one up."""
+    model = model or {}
+    if model.get("urlIdx") is not None:
+        return model["urlIdx"]
+    base_id = str((model.get("info") or {}).get("base_model_id") or "")
+    state = getattr(getattr(request, "app", None), "state", None)
+    if not base_id or state is None:
+        return None
+    for table in ("OPENAI_MODELS", "MODELS"):
+        models = getattr(state, table, None) or {}
+        base = models.get(base_id) or models.get(base_id.split(":")[0]) or {}
+        if base.get("urlIdx") is not None:
+            return base["urlIdx"]
+    return None
 
 
 class Filter:
@@ -398,7 +417,8 @@ class Filter:
                 raise MediaError("Hermes unreachable") from exc
         raise MediaError("dashboard login expired")
 
-    async def _send_uploads(self, body: dict, model, metadata: dict, function_id: Optional[str]) -> list[str]:
+    async def _send_uploads(self, body: dict, model, metadata: dict, function_id: Optional[str],
+                            request=None) -> list[str]:
         """Copy this message's attachments into the profile's folder -> the Hermes paths."""
         from open_webui.models.files import Files
         from open_webui.storage.provider import Storage
@@ -406,7 +426,7 @@ class Filter:
         files = body.get("files") or metadata.get("files") or []
         if not files or not self._base_url():
             return []
-        profile = await self._profile(model)
+        profile = await self._profile(model, request)
         if profile is None:
             return []
         folder = f"{profile_folder(profile)}/{self.valves.uploads_folder.strip().strip('/') or 'uploads'}"
@@ -429,10 +449,10 @@ class Filter:
 
     # ---- rewrite -----------------------------------------------------------------------------
 
-    async def _profile(self, model: Optional[dict]) -> Optional[str]:
+    async def _profile(self, model: Optional[dict], request=None) -> Optional[str]:
         """Profile of the model's Open WebUI connection (/p/<profile>/v1), 'default' without one,
         None when the model has no connection to read."""
-        idx = (model or {}).get("urlIdx")
+        idx = connection_index(model, request)
         if idx is None:
             return None
         try:
@@ -581,16 +601,16 @@ class Filter:
     # ---- Open WebUI hooks --------------------------------------------------------------------
 
     async def inlet(self, body: dict, __user__: Optional[dict] = None, __model__: Optional[dict] = None,
-                    __metadata__: Optional[dict] = None, __id__: Optional[str] = None) -> dict:
+                    __metadata__: Optional[dict] = None, __id__: Optional[str] = None, __request__=None) -> dict:
         """Before a request goes to Hermes: copy the user's attachments into the profile's folder and
         say where they are, and turn this filter's file links in earlier replies back into the
         MEDIA:<path> tags Hermes wrote, so the agent still sees its own file paths."""
         if self.valves.upload_to_hermes:
             try:
-                saved = await self._send_uploads(body, __model__, __metadata__ or {}, __id__)
+                saved = await self._send_uploads(body, __model__, __metadata__ or {}, __id__, __request__)
                 users = [m for m in body.get("messages") or [] if m.get("role") == "user"]
                 if saved and users:
-                    outputs = f"{profile_folder(await self._profile(__model__) or 'default')}/outputs"
+                    outputs = f"{profile_folder(await self._profile(__model__, __request__) or 'default')}/outputs"
                     note = ("\n\n[The user attached these files. The originals are saved in your folder; open them "
                             "from there to read or change them: " + ", ".join(saved) + ". To give the user a file, "
                             f"save it in {outputs}/ and put a MEDIA:<path> line for it in your reply; that line "
@@ -634,14 +654,16 @@ class Filter:
         __event_emitter__=None,
         __id__: Optional[str] = None,
         __model__: Optional[dict] = None,
+        __request__=None,
     ) -> dict:
         try:
-            return await self._outlet(body, __user__ or {}, __metadata__ or {}, __event_emitter__, __id__, __model__)
+            return await self._outlet(body, __user__ or {}, __metadata__ or {}, __event_emitter__, __id__, __model__,
+                                      __request__)
         except Exception:
             log.exception("Hermes Media: outlet failed; reply left unchanged")
             return body
 
-    async def _outlet(self, body, user, metadata, emitter, function_id, model=None) -> dict:
+    async def _outlet(self, body, user, metadata, emitter, function_id, model=None, request=None) -> dict:
         # Keep the dashboard login alive on every reply, not only replies with media.
         if self.valves.refresh_token and time.time() >= self._access_expires - 60:
             try:
@@ -667,7 +689,7 @@ class Filter:
 
         chat_id = body.get("chat_id") or metadata.get("chat_id") or ""
         message_id = message.get("id") or body.get("id") or metadata.get("message_id") or ""
-        profile = await self._profile(model) if self.valves.limit_to_profile else None
+        profile = await self._profile(model, request) if self.valves.limit_to_profile else None
         results = await self._resolve(paths, chat_id, message_id, user.get("id", ""), function_id, profile)
 
         if isinstance(message.get("content"), str):

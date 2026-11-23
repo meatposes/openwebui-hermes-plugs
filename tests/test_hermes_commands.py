@@ -96,7 +96,7 @@ class SidePanel(unittest.IsolatedAsyncioTestCase):
     async def test_results_open_in_panel_or_return_to_sidebar(self):
         action = Action()
 
-        async def api(model):
+        async def api(model, request=None):
             return "http://hermes/v1", "key", "kid"
 
         async def run(line, ctx):
@@ -182,7 +182,7 @@ class FilesBrowser(unittest.IsolatedAsyncioTestCase):
     async def test_panel_runs_only_panel_commands_and_uses_the_users_profile(self):
         seen = []
 
-        async def api(model):
+        async def api(model, request=None):
             return "http://hermes/v1", "key", "work"
 
         async def run(line, ctx):

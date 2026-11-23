@@ -1,6 +1,6 @@
 """
 title: Hermes Activity
-version: 1.0.0
+version: 1.0.1
 description: Shows Hermes Agent tool calls as status lines while it works, and lets you approve or deny commands Hermes asks permission for.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -17,6 +17,25 @@ log = logging.getLogger(__name__)
 
 # How Open WebUI's dialog answer maps onto Hermes's approval choices.
 _APPROVE_SCOPES = ("once", "session", "always")
+
+
+def connection_index(model: Optional[dict], request=None) -> Optional[int]:
+    """Index of the model's Open WebUI connection. A Workspace model (built on a base model, for example to
+    give it an avatar, a prompt or group access) has no urlIdx of its own: Open WebUI routes it through its
+    base model's connection, so look that one up."""
+    model = model or {}
+    if model.get("urlIdx") is not None:
+        return model["urlIdx"]
+    base_id = str((model.get("info") or {}).get("base_model_id") or "")
+    state = getattr(getattr(request, "app", None), "state", None)
+    if not base_id or state is None:
+        return None
+    for table in ("OPENAI_MODELS", "MODELS"):
+        models = getattr(state, table, None) or {}
+        base = models.get(base_id) or models.get(base_id.split(":")[0]) or {}
+        if base.get("urlIdx") is not None:
+            return base["urlIdx"]
+    return None
 
 
 class Filter:
@@ -84,11 +103,11 @@ class Filter:
         self._tool_counts[message_id] = self._tool_counts.get(message_id, 0) + add
         return self._tool_counts[message_id]
 
-    async def _connection(self, model: Optional[dict]) -> tuple[str, str]:
+    async def _connection(self, model: Optional[dict], request=None) -> tuple[str, str]:
         """Hermes base URL (ending in /v1) and API key for this model."""
         if self.valves.hermes_api_url.strip():
             return self.valves.hermes_api_url.strip().rstrip("/"), self.valves.hermes_api_key.strip()
-        idx = (model or {}).get("urlIdx")
+        idx = connection_index(model, request)
         if idx is None:
             raise RuntimeError("model has no Open WebUI connection; set Hermes API URL and Key")
         from open_webui.routers.openai import get_openai_connection
@@ -153,7 +172,7 @@ class Filter:
 
     # ---- approvals ---------------------------------------------------------------------------
 
-    async def _handle_approval(self, event: dict, emitter, caller, model) -> None:
+    async def _handle_approval(self, event: dict, emitter, caller, model, request=None) -> None:
         run_id = event.get("run_id")
         choices = event.get("choices") or ["once", "deny"]
         summary = str(event.get("command") or event.get("tool") or "a command")[:80]
@@ -193,7 +212,7 @@ class Filter:
         import aiohttp
 
         try:
-            base, key = await self._connection(model)
+            base, key = await self._connection(model, request)
             headers = {"Authorization": f"Bearer {key}"} if key else {}
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
                 async with session.post(f"{base}/runs/{run_id}/approval", json=body, headers=headers) as resp:
@@ -211,14 +230,14 @@ class Filter:
     # ---- scheduled task alerts ---------------------------------------------------------------
 
     async def inlet(self, body: dict, __user__: Optional[dict] = None, __event_emitter__=None,
-                    __model__: Optional[dict] = None) -> dict:
+                    __model__: Optional[dict] = None, __request__=None) -> dict:
         """On each new message, announce scheduled tasks that finished since the last one."""
         if not self.valves.task_alerts or not __event_emitter__:
             return body
         try:
             import aiohttp
 
-            base, key = await self._connection(__model__)
+            base, key = await self._connection(__model__, __request__)
             root = base[:-3] if base.endswith("/v1") else base
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
                 async with session.get(f"{root}/api/jobs", headers={"Authorization": f"Bearer {key}"} if key else {}) as resp:
@@ -252,6 +271,7 @@ class Filter:
         __event_call__=None,
         __metadata__: Optional[dict] = None,
         __model__: Optional[dict] = None,
+        __request__=None,
     ) -> dict:
         """Every streamed payload passes through here, including Hermes's own events that Open
         WebUI would otherwise drop: tool progress, status notes and approval requests."""
@@ -263,7 +283,7 @@ class Filter:
             # Hermes's own payloads are returned empty: Open WebUI skips empty chunks, and would
             # otherwise try to forward the approval payload's "event" string as a UI event.
             if event.get("event") == "approval.request":
-                await self._handle_approval(event, __event_emitter__, __event_call__, __model__)
+                await self._handle_approval(event, __event_emitter__, __event_call__, __model__, __request__)
                 return self._closing_chunk(message_id)
             if "toolCallId" in event and "status" in event and "choices" not in event:
                 if self.valves.show_tool_calls and event["status"] == "running":

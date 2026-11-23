@@ -1,6 +1,6 @@
 """
 title: Hermes Stop
-version: 1.0.0
+version: 1.0.1
 description: Makes Open WebUI's Stop button stop Hermes Agent too, not just the reply on screen.
 required_open_webui_version: 0.12.0
 license: MIT
@@ -13,6 +13,25 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
+
+
+def connection_index(model: Optional[dict], request=None) -> Optional[int]:
+    """Index of the model's Open WebUI connection. A Workspace model (built on a base model, for example to
+    give it an avatar, a prompt or group access) has no urlIdx of its own: Open WebUI routes it through its
+    base model's connection, so look that one up."""
+    model = model or {}
+    if model.get("urlIdx") is not None:
+        return model["urlIdx"]
+    base_id = str((model.get("info") or {}).get("base_model_id") or "")
+    state = getattr(getattr(request, "app", None), "state", None)
+    if not base_id or state is None:
+        return None
+    for table in ("OPENAI_MODELS", "MODELS"):
+        models = getattr(state, table, None) or {}
+        base = models.get(base_id) or models.get(base_id.split(":")[0]) or {}
+        if base.get("urlIdx") is not None:
+            return base["urlIdx"]
+    return None
 
 
 class Filter:
@@ -33,10 +52,10 @@ class Filter:
         self.valves = self.Valves()
         self._runs: dict[int, dict] = {}  # id(reply task) -> {"run_id", "finished", "model"}
 
-    async def _connection(self, model: Optional[dict]) -> tuple[str, str]:
+    async def _connection(self, model: Optional[dict], request=None) -> tuple[str, str]:
         if self.valves.hermes_api_url.strip():
             return self.valves.hermes_api_url.strip().rstrip("/"), self.valves.hermes_api_key.strip()
-        idx = (model or {}).get("urlIdx")
+        idx = connection_index(model, request)
         if idx is None:
             raise RuntimeError("model has no Open WebUI connection; set Hermes API URL and Key")
         from open_webui.routers.openai import get_openai_connection
@@ -48,7 +67,7 @@ class Filter:
         import aiohttp
 
         try:
-            base, key = await self._connection(run["model"])
+            base, key = await self._connection(run["model"], run.get("request"))
             headers = {"Authorization": f"Bearer {key}"} if key else {}
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
                 # A Stop pressed in the first moments can reach Hermes before it has admitted the run
@@ -104,7 +123,7 @@ class Filter:
                     registry = state.hermes_active_runs
                     registry[chat_id] = {"run_id": event["id"], "model": __model__}
                 run = {"run_id": event["id"], "finished": False, "model": __model__,
-                       "chat_id": chat_id, "registry": registry}
+                       "chat_id": chat_id, "registry": registry, "request": __request__}
                 self._runs[id(task)] = run
                 task.add_done_callback(self._on_reply_done)
             if run is not None:
